@@ -4,7 +4,7 @@
 
 # ScratchPy Studio
 
-**Snap block together like Scratch. Get real Python out the other side.**
+**Snap blocks together like Scratch. Get real Python out the other side.**
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-4C97FF?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-59C059)](#)
