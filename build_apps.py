@@ -74,7 +74,10 @@ def build():
             "--add-data", ASSETS + os.pathsep + "scratchpy_assets"]
 
     if system == "Windows":
-        args += ["--icon", os.path.join(ASSETS, "scratchpy_icon.ico")]
+        args += ["--icon", os.path.join(ASSETS, "scratchpy_icon.ico"),
+                 # the sound blocks reach for winsound from inside a string of
+                 # generated code, so PyInstaller cannot see it by itself
+                 "--hidden-import", "winsound"]
     elif system == "Darwin":
         args += ["--icon", os.path.join(ASSETS, "scratchpy_icon.icns"),
                  "--osx-bundle-identifier", "com.scratchpy.studio"]

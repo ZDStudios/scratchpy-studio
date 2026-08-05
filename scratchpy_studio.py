@@ -35,6 +35,7 @@ import os
 import platform
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -48,7 +49,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 APP_NAME = "ScratchPy Studio"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 PROJECT_EXT = ".spy"
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -66,6 +67,7 @@ CATS: Dict[str, Dict[str, str]] = {
     "control":   {"name": "Control",   "color": "#FFAB19", "dark": "#CF8B17"},
     "operators": {"name": "Operators", "color": "#59C059", "dark": "#389438"},
     "text":      {"name": "Text",      "color": "#9966FF", "dark": "#774DCB"},
+    "sound":     {"name": "Sound",     "color": "#E0479E", "dark": "#B8347E"},
     "variables": {"name": "Variables", "color": "#FF8C1A", "dark": "#DB6E00"},
     "lists":     {"name": "Lists",     "color": "#FF661A", "dark": "#E64D00"},
     "files":     {"name": "Files",     "color": "#5CB1D6", "dark": "#2E8EB8"},
@@ -75,8 +77,8 @@ CATS: Dict[str, Dict[str, str]] = {
     "packages":  {"name": "Packages",  "color": "#0FBD8C", "dark": "#0B8E69"},
 }
 
-CAT_ORDER = ["events", "control", "operators", "text", "variables", "lists",
-             "files", "web", "functions", "python", "packages"]
+CAT_ORDER = ["events", "control", "operators", "text", "sound", "variables",
+             "lists", "files", "web", "functions", "python", "packages"]
 
 UI = {
     "topbar":      "#855CD6",   # Scratch purple menu bar
@@ -655,6 +657,509 @@ def web_address(base, values):
 }
 
 
+# --------------------------------------------------------------------------- #
+#  Sound - speech and music with nothing installed at all.
+#
+#  Every computer can already do this; the trick is that each one does it a
+#  different way.  Windows has the voices behind Narrator (SAPI) and winsound,
+#  macOS has "say" and "afplay", Linux has espeak and aplay.  These helpers
+#  hide the difference, so one set of blocks works everywhere.
+# --------------------------------------------------------------------------- #
+
+SOUND_IMPORTS = ("atexit", "os", "shutil", "subprocess", "sys", "tempfile",
+                 "time", "wave")
+TONE_IMPORTS = SOUND_IMPORTS + ("array", "math", "random")
+SPEECH_IMPORTS = SOUND_IMPORTS + ("base64",)
+
+HELPERS["sound"] = '''
+# ---- sound: playing things out loud ----------------------------------------
+SOUND = {"volume": 100, "tempo": 120, "voice": "", "speed": 0}
+_SOUND_PLAYING = []          # helper programs that are making a noise
+_SOUND_UNTIL = [0.0]         # when the sound Windows is playing should end
+
+
+def _sound_quiet():
+    """Keep a helper program from flashing a black window on Windows."""
+    if sys.platform.startswith("win"):
+        return {"creationflags": 0x08000000}
+    return {}
+
+
+def _sound_forget(proc):
+    if proc in _SOUND_PLAYING:
+        _SOUND_PLAYING.remove(proc)
+
+
+def _sound_start(command, wait=True):
+    """Run one of the little speaking or playing programs."""
+    try:
+        proc = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, **_sound_quiet())
+    except FileNotFoundError:
+        raise RuntimeError("this computer has no %s" % command[0])
+    _SOUND_PLAYING.append(proc)
+    if wait:
+        _, trouble = proc.communicate()
+        _sound_forget(proc)
+        if proc.returncode:
+            note = (trouble or b"").decode("utf-8", "replace").strip()
+            raise RuntimeError(note or "the sound program gave up")
+    return proc
+
+
+def _mci(command):
+    """Ask Windows itself to play a file - this is the one that knows mp3."""
+    import ctypes
+    answer = ctypes.create_unicode_buffer(600)
+    code = ctypes.windll.winmm.mciSendStringW(command, answer, 600, 0)
+    if code:
+        raise RuntimeError("Windows could not play that file (error %d)" % code)
+    return answer.value
+
+
+def _mci_play(path, wait):
+    try:
+        _mci("close scratchpy")
+    except Exception:
+        pass
+    _mci('open "%s" alias scratchpy' % path)
+    if wait:
+        _mci("play scratchpy wait")
+        try:
+            _mci("close scratchpy")
+        except Exception:
+            pass
+        return
+    _mci("play scratchpy")
+    try:
+        _sound_until(int(_mci("status scratchpy length") or 0) / 1000.0)
+    except Exception:
+        pass
+
+
+def _sound_until(seconds):
+    _SOUND_UNTIL[0] = max(_SOUND_UNTIL[0], time.time() + float(seconds))
+
+
+def sound_seconds(path):
+    """How long a .wav file lasts, in seconds."""
+    try:
+        handle = wave.open(str(path), "rb")
+        try:
+            return handle.getnframes() / float(handle.getframerate() or 1)
+        finally:
+            handle.close()
+    except Exception:
+        return 0.0
+
+
+def _play_file(path, wait):
+    full = os.path.abspath(str(path))
+    if not os.path.exists(full):
+        raise FileNotFoundError("there is no sound file called %s" % path)
+    if sys.platform.startswith("win"):
+        if full.lower().endswith(".wav"):
+            import winsound
+            if wait:
+                winsound.PlaySound(full, winsound.SND_FILENAME)
+            else:
+                winsound.PlaySound(full, winsound.SND_FILENAME |
+                                   winsound.SND_ASYNC)
+                _sound_until(sound_seconds(full))
+            return
+        _mci_play(full, wait)
+        return
+    if sys.platform == "darwin":
+        _sound_start(["afplay", "-v", "%.3f" % (SOUND["volume"] / 100.0),
+                      full], wait)
+        return
+    simple = full.lower().endswith((".wav", ".ogg", ".flac", ".aiff", ".au"))
+    players = (("paplay", []), ("aplay", ["-q"]),
+               ("ffplay", ["-nodisp", "-autoexit", "-loglevel", "quiet"]),
+               ("mpv", ["--really-quiet"]), ("mpg123", ["-q"]),
+               ("cvlc", ["--play-and-exit", "--quiet", "vlc://quit"]))
+    if not simple:
+        players = players[2:] + players[:2]
+    for name, extra in players:
+        tool = shutil.which(name)
+        if tool:
+            _sound_start([tool] + extra + [full], wait)
+            return
+    raise RuntimeError("no sound player on this computer - install one with:  "
+                       "sudo apt install alsa-utils")
+
+
+def set_volume(percent=100):
+    """How loud tones and speech are, from 0 to 100."""
+    SOUND["volume"] = max(0, min(100, int(round(float(percent)))))
+
+
+def volume():
+    """The loudness everything is played at."""
+    return SOUND["volume"]
+
+
+def play_sound(path):
+    """Play a sound file and wait until it has finished."""
+    _play_file(path, True)
+
+
+def start_sound(path):
+    """Start a sound file playing and carry straight on."""
+    _play_file(path, False)
+
+
+def wait_for_sounds():
+    """Wait for everything that is still playing."""
+    limit = time.time() + 120
+    for proc in list(_SOUND_PLAYING):
+        try:
+            proc.wait(timeout=120)
+        except Exception:
+            pass
+        _sound_forget(proc)
+    while time.time() < min(_SOUND_UNTIL[0], limit):
+        time.sleep(0.05)
+
+
+def stop_all_sounds():
+    """Silence, right now."""
+    _SOUND_UNTIL[0] = 0.0
+    for proc in list(_SOUND_PLAYING):
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        _sound_forget(proc)
+    if sys.platform.startswith("win"):
+        try:
+            import winsound
+            winsound.PlaySound(None, winsound.SND_PURGE)
+        except Exception:
+            pass
+        try:
+            _mci("close scratchpy")
+        except Exception:
+            pass
+
+
+# a sound that was started and left to play should still be heard even if the
+# program itself has run out of blocks
+atexit.register(wait_for_sounds)
+'''
+
+HELPERS["tone"] = '''
+# ---- tones, notes and drums, worked out one number at a time ----------------
+SOUND_RATE = 22050           # samples a second: plenty for beeps and notes
+NOTE_STEPS = {"c": 0, "d": 2, "e": 4, "f": 5, "g": 7, "a": 9, "b": 11}
+DRUMS = {
+    "snare":          ("noise", 0, 0.13),
+    "bass drum":      ("sweep", 95, 0.24),
+    "side stick":     ("noise", 0, 0.04),
+    "crash cymbal":   ("noise", 0, 0.85),
+    "open hi-hat":    ("noise", 0, 0.28),
+    "closed hi-hat":  ("noise", 0, 0.06),
+    "tambourine":     ("noise", 0, 0.18),
+    "hand clap":      ("noise", 0, 0.10),
+    "claves":         ("sine", 2500, 0.05),
+    "wood block":     ("sine", 1150, 0.06),
+    "cowbell":        ("square", 800, 0.15),
+    "triangle":       ("sine", 4000, 0.45),
+}
+
+
+def set_tempo(bpm=120):
+    """How fast a beat is, in beats a minute."""
+    SOUND["tempo"] = max(20.0, min(500.0, float(bpm)))
+
+
+def tempo():
+    """The speed notes are played at, in beats a minute."""
+    return SOUND["tempo"]
+
+
+def beats_to_seconds(beats):
+    """How long a number of beats lasts at the current tempo."""
+    return 60.0 / float(SOUND["tempo"] or 120) * float(beats)
+
+
+def rest(beats=0.25):
+    """Silence for a number of beats."""
+    time.sleep(max(0.0, beats_to_seconds(beats)))
+
+
+def note_number(note):
+    """60 and "C4" both mean middle C."""
+    try:
+        return float(note)
+    except (TypeError, ValueError):
+        pass
+    text = str(note).strip().lower()
+    if not text or text[0] not in NOTE_STEPS:
+        raise ValueError("%r is not a note - try 60, or C4, or F#3" % (note,))
+    step = NOTE_STEPS[text[0]]
+    text = text[1:]
+    while text[:1] in ("#", "s", "b"):
+        step += 1 if text[0] in "#s" else -1
+        text = text[1:]
+    if text and not text.lstrip("-").isdigit():
+        raise ValueError("%r is not a note - try 60, or C4, or F#3" % (note,))
+    return 12 * ((int(text) if text else 4) + 1) + step
+
+
+def note_hz(note):
+    """The frequency of a note. A above middle C (69) is 440."""
+    return 440.0 * (2.0 ** ((note_number(note) - 69.0) / 12.0))
+
+
+def _sound_folder():
+    folder = os.path.join(tempfile.gettempdir(), "scratchpy_sounds")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+def _write_wav(samples, name):
+    """Save a list of numbers as a real .wav file."""
+    path = os.path.join(_sound_folder(), name + ".wav")
+    handle = wave.open(path, "wb")
+    try:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(SOUND_RATE)
+        handle.writeframes(samples.tobytes())
+    finally:
+        handle.close()
+    return path
+
+
+def _tone_samples(hz, seconds, shape="sine"):
+    """A plain tone, faded in and out so it does not click."""
+    count = max(1, int(SOUND_RATE * max(0.02, float(seconds))))
+    peak = 30000.0 * (SOUND["volume"] / 100.0)
+    samples = array.array("h", bytes(2 * count))
+    turn = 2.0 * math.pi * float(hz) / SOUND_RATE
+    rise = max(1, min(int(SOUND_RATE * 0.005), count // 4))
+    fall = max(1, min(int(SOUND_RATE * 0.030), count // 2))
+    for i in range(count):
+        angle = turn * i
+        spin = (angle / (2.0 * math.pi)) % 1.0
+        if shape == "square":
+            value = 1.0 if spin < 0.5 else -1.0
+        elif shape == "saw":
+            value = 2.0 * spin - 1.0
+        elif shape == "triangle":
+            value = 4.0 * abs(spin - 0.5) - 1.0
+        elif shape == "noise":
+            value = random.uniform(-1.0, 1.0)
+        else:
+            value = math.sin(angle)
+        level = 1.0
+        if i < rise:
+            level = i / float(rise)
+        elif count - i < fall:
+            level = (count - i) / float(fall)
+        samples[i] = int(peak * value * level)
+    return samples
+
+
+def _drum_samples(kind, hz, seconds):
+    """A drum: a burst of sound that dies away quickly."""
+    count = max(1, int(SOUND_RATE * seconds))
+    peak = 30000.0 * (SOUND["volume"] / 100.0)
+    samples = array.array("h", bytes(2 * count))
+    angle = 0.0
+    for i in range(count):
+        along = i / float(count)
+        fade = (1.0 - along) ** 3
+        if kind == "noise":
+            value = random.uniform(-1.0, 1.0)
+        else:
+            pitch = hz * (1.0 - 0.7 * along) if kind == "sweep" else hz
+            angle += 2.0 * math.pi * pitch / SOUND_RATE
+            value = math.sin(angle)
+            if kind == "square":
+                value = 1.0 if value >= 0 else -1.0
+        samples[i] = int(peak * value * fade)
+    return samples
+
+
+def _cached_wav(name, build):
+    """Work a sound out once, then keep it for the next time."""
+    path = os.path.join(_sound_folder(), name + ".wav")
+    if not os.path.exists(path):
+        _write_wav(build(), name)
+    return path
+
+
+def play_tone(hz=440, seconds=0.5, shape="sine"):
+    """Play a plain tone. 440 is the A an orchestra tunes to."""
+    hz, seconds, shape = float(hz), float(seconds), str(shape).lower()
+    name = "tone_%d_%d_%s_%d" % (round(hz), round(seconds * 1000), shape,
+                                 SOUND["volume"])
+    _play_file(_cached_wav(name, lambda: _tone_samples(hz, seconds, shape)),
+               True)
+
+
+def beep(hz=880, seconds=0.2):
+    """A short high note - handy for saying "look at me"."""
+    play_tone(hz, seconds)
+
+
+def play_note(note=60, beats=0.5):
+    """Play a note for a number of beats, the way Scratch's music does."""
+    seconds = max(0.05, beats_to_seconds(beats))
+    play_tone(note_hz(note), seconds * 0.92)
+    time.sleep(seconds * 0.08)
+
+
+def play_drum(drum="snare", beats=0.25):
+    """Play a drum for a number of beats."""
+    kind, hz, length = DRUMS.get(str(drum).lower(), DRUMS["snare"])
+    tidy = "".join(c if c.isalnum() else "_" for c in str(drum).lower())
+    name = "drum_%s_%d" % (tidy, SOUND["volume"])
+    _play_file(_cached_wav(name, lambda: _drum_samples(kind, hz, length)), True)
+    time.sleep(max(0.0, beats_to_seconds(beats) - length))
+'''
+
+HELPERS["speech"] = '''
+# ---- speech: the voices that came with the computer -------------------------
+def set_voice(name=""):
+    """Pick one of the voices this computer already has."""
+    chosen = str(name or "").strip()
+    SOUND["voice"] = "" if chosen.lower() == "default" else chosen
+
+
+def set_speech_speed(speed=0):
+    """-10 is very slow, 0 is normal, 10 is very fast."""
+    SOUND["speed"] = max(-10.0, min(10.0, float(speed)))
+
+
+def _speech_pace():
+    """The speed setting turned into words a minute."""
+    return int(max(80, min(400, 175 + SOUND["speed"] * 16)))
+
+
+def _powershell():
+    return shutil.which("powershell") or shutil.which("pwsh") or "powershell"
+
+
+def _speech_windows(text, into=""):
+    """Windows speaks with the same voices Narrator uses."""
+    packed = base64.b64encode(str(text).encode("utf-8")).decode("ascii")
+    script = ["Add-Type -AssemblyName System.Speech;",
+              "$t=[Text.Encoding]::UTF8.GetString("
+              "[Convert]::FromBase64String('%s'));" % packed,
+              "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;",
+              "$s.Rate=%d;" % int(round(SOUND["speed"])),
+              "$s.Volume=%d;" % int(SOUND["volume"])]
+    if SOUND["voice"]:
+        script.append("try{$s.SelectVoice('%s')}catch{};"
+                      % str(SOUND["voice"]).replace("'", "''"))
+    if into:
+        script.append("$s.SetOutputToWaveFile('%s');"
+                      % os.path.abspath(str(into)).replace("'", "''"))
+    script.append("$s.Speak($t);$s.Dispose();")
+    return [_powershell(), "-NoProfile", "-Command", " ".join(script)]
+
+
+def _speech_mac(text, into=""):
+    command = ["say", "-r", str(_speech_pace())]
+    if SOUND["voice"]:
+        command += ["-v", str(SOUND["voice"])]
+    if into:
+        command += ["--data-format=LEI16@22050", "-o",
+                    os.path.abspath(str(into))]
+    command.append("[[volm %.2f]] %s"
+                   % (max(0.0, min(1.0, SOUND["volume"] / 100.0)), text))
+    return command
+
+
+def _speech_linux(text, into=""):
+    espeak = shutil.which("espeak-ng") or shutil.which("espeak")
+    if espeak:
+        command = [espeak, "-s", str(_speech_pace()),
+                   "-a", str(int(SOUND["volume"] * 2))]
+        if SOUND["voice"]:
+            command += ["-v", str(SOUND["voice"])]
+        if into:
+            command += ["-w", os.path.abspath(str(into))]
+        command.append(str(text))
+        return command
+    talker = shutil.which("spd-say")
+    if talker and not into:
+        return [talker, "-w", "-r", str(int(SOUND["speed"] * 10)), str(text)]
+    raise RuntimeError("this computer has no voice yet - add one with:  "
+                       "sudo apt install espeak-ng")
+
+
+def _speech_command(text, into=""):
+    if sys.platform.startswith("win"):
+        return _speech_windows(text, into)
+    if sys.platform == "darwin":
+        return _speech_mac(text, into)
+    return _speech_linux(text, into)
+
+
+def speak(text):
+    """Say something out loud, and wait until it has been said."""
+    if str(text).strip():
+        _sound_start(_speech_command(text), True)
+
+
+def start_speaking(text):
+    """Say something out loud and carry straight on with the next block."""
+    if str(text).strip():
+        _sound_start(_speech_command(text), False)
+
+
+def save_speech(text, path="speech.wav"):
+    """Write what would be said into a sound file you can keep."""
+    _sound_start(_speech_command(text, str(path)), True)
+    return os.path.abspath(str(path))
+
+
+def voice_names():
+    """The name of every voice this computer can speak with."""
+    if sys.platform.startswith("win"):
+        command = [_powershell(), "-NoProfile", "-Command",
+                   "Add-Type -AssemblyName System.Speech;"
+                   "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
+                   ".GetInstalledVoices()|ForEach-Object{$_.VoiceInfo.Name}"]
+    elif sys.platform == "darwin":
+        command = ["say", "-v", "?"]
+    else:
+        espeak = shutil.which("espeak-ng") or shutil.which("espeak")
+        if not espeak:
+            return []
+        command = [espeak, "--voices"]
+    try:
+        answer = subprocess.run(command, capture_output=True, text=True,
+                                timeout=25, **_sound_quiet())
+    except Exception:
+        return []
+    found = []
+    for line in (answer.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if sys.platform.startswith("win"):
+            found.append(line)
+        elif sys.platform == "darwin":
+            found.append(line.split("  ")[0].strip())
+        else:
+            parts = line.split()
+            if len(parts) > 3 and parts[0] != "Pty":
+                found.append(parts[3])
+    return found
+'''
+
+# The voices this computer turned out to have.  Filled in by a background
+# thread shortly after the window opens, so the dropdown on the "set voice"
+# block lists real names rather than guesses.
+VOICE_CACHE: List[str] = []
+
+
 # =========================================================================== #
 #  SECTION 3 - the standard block library
 # =========================================================================== #
@@ -829,6 +1334,111 @@ B("text_starts", "text", "boolean", "%a(s,banana) starts with %a(sub,ba)",
 
 B("text_pad", "text", "reporter", "%a(s,7) padded to %n(n,3) characters",
   "str({s}).rjust(int({n}), '0')")
+
+# ----------------------------------------------------------------- SOUND --- #
+#  Speech and music with nothing installed.  Windows, macOS and Linux can all
+#  already talk and make tones - these blocks just ask them nicely.
+
+B("sound_speak", "sound", "stack", "say %a(text,hello) out loud",
+  "speak({text})", imports=SPEECH_IMPORTS, helpers=("sound", "speech"),
+  tip="Speaks with the voice this computer already has - there is nothing "
+      "to install. It waits until the sentence has been said.")
+
+B("sound_speak_async", "sound", "stack", "start saying %a(text,hello)",
+  "start_speaking({text})", imports=SPEECH_IMPORTS,
+  helpers=("sound", "speech"),
+  tip="Starts talking and moves straight on to the next block, so the "
+      "program carries on while it speaks.")
+
+B("sound_voice", "sound", "stack", "set voice to %q(voice,@voices)",
+  "set_voice({voice})", imports=SPEECH_IMPORTS, helpers=("sound", "speech"),
+  tip="The list is the voices installed on this computer. Windows adds more "
+      "under Settings, Time and language, Speech.")
+
+B("sound_speed", "sound", "stack", "set speaking speed to %n(speed,0)",
+  "set_speech_speed({speed})", imports=SPEECH_IMPORTS,
+  helpers=("sound", "speech"),
+  tip="0 is normal, -10 is very slow and 10 is very fast.")
+
+B("sound_save_speech", "sound", "stack",
+  "save speech %a(text,hello) to %s(path,speech.wav)",
+  "save_speech({text}, {path})", imports=SPEECH_IMPORTS,
+  helpers=("sound", "speech"),
+  tip="Keeps the speech as a real sound file you can play anywhere.")
+
+B("sound_voices", "sound", "reporter", "voices on this computer",
+  "voice_names()", imports=SPEECH_IMPORTS, helpers=("sound", "speech"))
+
+B("sound_beep", "sound", "stack", "beep", "beep()", imports=TONE_IMPORTS,
+  helpers=("sound", "tone"), tip="A short high note.")
+
+B("sound_note", "sound", "stack",
+  "play note %q(note,C4|D4|E4|F4|G4|A4|B4|C5|D5|E5) for %n(beats,0.5) beats",
+  "play_note({note}, {beats})", imports=TONE_IMPORTS,
+  helpers=("sound", "tone"),
+  tip="C4 is middle C. Sharps and flats work too: F#3, Bb4.")
+
+B("sound_note_number", "sound", "stack",
+  "play note number %n(note,60) for %n(beats,0.5) beats",
+  "play_note({note}, {beats})", imports=TONE_IMPORTS,
+  helpers=("sound", "tone"),
+  tip="The same numbers Scratch uses: 60 is middle C, 61 is C sharp.")
+
+B("sound_tone", "sound", "stack",
+  "play %n(hz,440) Hz for %n(secs,0.5) seconds",
+  "play_tone({hz}, {secs})", imports=TONE_IMPORTS, helpers=("sound", "tone"),
+  tip="440 Hz is the A an orchestra tunes to. Double it and you go up "
+      "an octave.")
+
+B("sound_shape", "sound", "stack",
+  "play %q(shape,sine|square|saw|triangle|noise) at %n(hz,440) Hz "
+  "for %n(secs,0.5) seconds",
+  "play_tone({hz}, {secs}, {shape})", imports=TONE_IMPORTS,
+  helpers=("sound", "tone"),
+  tip="Sine is a smooth flute, square is an old computer game, noise is "
+      "the sea.")
+
+B("sound_drum", "sound", "stack",
+  "play drum %q(drum,snare|bass drum|closed hi-hat|open hi-hat|crash cymbal|"
+  "hand clap|side stick|tambourine|claves|wood block|cowbell|triangle) "
+  "for %n(beats,0.25) beats",
+  "play_drum({drum}, {beats})", imports=TONE_IMPORTS,
+  helpers=("sound", "tone"))
+
+B("sound_rest", "sound", "stack", "rest for %n(beats,0.25) beats",
+  "rest({beats})", imports=TONE_IMPORTS, helpers=("sound", "tone"))
+
+B("sound_tempo_set", "sound", "stack", "set tempo to %n(bpm,120) beats a minute",
+  "set_tempo({bpm})", imports=TONE_IMPORTS, helpers=("sound", "tone"))
+
+B("sound_tempo", "sound", "reporter", "tempo", "tempo()",
+  imports=TONE_IMPORTS, helpers=("sound", "tone"))
+
+B("sound_play_file", "sound", "stack", "play sound %s(path,sound.wav)",
+  "play_sound({path})", imports=SOUND_IMPORTS, helpers=("sound",),
+  tip="Plays a file and waits for it. .wav works everywhere; .mp3 works "
+      "on Windows and macOS.")
+
+B("sound_start_file", "sound", "stack", "start sound %s(path,sound.wav)",
+  "start_sound({path})", imports=SOUND_IMPORTS, helpers=("sound",),
+  tip="Starts the file playing and carries straight on.")
+
+B("sound_wait", "sound", "stack", "wait until sounds have finished",
+  "wait_for_sounds()", imports=SOUND_IMPORTS, helpers=("sound",))
+
+B("sound_stop", "sound", "stack", "stop all sounds", "stop_all_sounds()",
+  imports=SOUND_IMPORTS, helpers=("sound",))
+
+B("sound_volume_set", "sound", "stack", "set volume to %n(percent,100) percent",
+  "set_volume({percent})", imports=SOUND_IMPORTS, helpers=("sound",),
+  tip="Changes how loud tones and speech are. A sound file you play keeps "
+      "its own loudness.")
+
+B("sound_volume", "sound", "reporter", "volume", "volume()",
+  imports=SOUND_IMPORTS, helpers=("sound",))
+
+B("sound_length", "sound", "reporter", "seconds in sound %s(path,sound.wav)",
+  "sound_seconds({path})", imports=SOUND_IMPORTS, helpers=("sound",))
 
 # ------------------------------------------------------------- VARIABLES --- #
 
@@ -1497,6 +2107,8 @@ class Project:
             return list(self.messages) or ["message1"]
         if source == "@funcs":
             return [f["name"] for f in self.functions] or ["my block"]
+        if source == "@voices":
+            return list(VOICE_CACHE) or ["default"]
         return []
 
     def function_by_name(self, name: str) -> Optional[dict]:
@@ -3968,7 +4580,7 @@ def blend(start: str, end: str, t: float) -> str:
 class CategoryStrip(tk.Canvas):
     """The narrow column of coloured category buttons."""
 
-    ITEM_H = 51
+    ITEM_H = 47
 
     def __init__(self, master, app: "App"):
         super().__init__(master, width=76, bg=UI["panel"], highlightthickness=0)
@@ -4257,6 +4869,12 @@ class PaletteView(ttk.Frame):
             if p.functions:
                 items.append(("header", "returning a value"))
             for bid in PALETTE["functions"]:
+                items.append(("block", bid))
+        elif cat == "sound":
+            items.append(("button", ("Sound studio...", self.app.open_sound)))
+            items.append(("note", "Nothing to install: these use the voice "
+                                  "and the speaker this computer already has."))
+            for bid in PALETTE["sound"]:
                 items.append(("block", bid))
         elif cat == "web":
             items.append(("button", ("Try a request...", self.app.web_tester)))
@@ -4947,6 +5565,46 @@ CURATED: Dict[str, List[dict]] = {
         _blk("pkg::turtle::done", "stack", "finish drawing", "turtle.done()",
              ["turtle"]),
     ],
+    # The Sound blocks already speak with nothing installed.  These are here
+    # for people who have met pyttsx3 elsewhere - the catch with it is that
+    # nothing is heard until runAndWait is called, so every block does both.
+    "pyttsx3": [
+        _blk("pkg::pyttsx3::say", "stack",
+             "pyttsx3: say %a(text,hello) out loud",
+             "_talker = pyttsx3.init()\n"
+             "_talker.say({text})\n"
+             "_talker.runAndWait()", ["pyttsx3"],
+             "pyttsx3 stays silent until runAndWait is called - this block "
+             "does both. The Sound blocks say the same thing with nothing "
+             "installed at all."),
+        _blk("pkg::pyttsx3::rate", "stack",
+             "pyttsx3: say %a(text,hello) at %n(rate,175) words a minute",
+             "_talker = pyttsx3.init()\n"
+             "_talker.setProperty('rate', int({rate}))\n"
+             "_talker.say({text})\n"
+             "_talker.runAndWait()", ["pyttsx3"]),
+        _blk("pkg::pyttsx3::save", "stack",
+             "pyttsx3: save %a(text,hello) spoken to %s(path,speech.wav)",
+             "_talker = pyttsx3.init()\n"
+             "_talker.save_to_file({text}, {path})\n"
+             "_talker.runAndWait()", ["pyttsx3"]),
+    ],
+    "gtts": [
+        _blk("pkg::gtts::save", "stack",
+             "Google voice: save %a(text,hello) to %s(path,speech.mp3)",
+             "gtts.gTTS(str({text})).save({path})", ["gtts"],
+             "Needs the internet, and only writes a file - play it "
+             "afterwards with the 'play sound' block."),
+        _blk("pkg::gtts::lang", "stack",
+             "Google voice: save %a(text,hola) in %s(lang,es) "
+             "to %s(path,speech.mp3)",
+             "gtts.gTTS(str({text}), lang={lang}).save({path})", ["gtts"]),
+    ],
+    "playsound": [
+        _blk("pkg::playsound::play", "stack",
+             "playsound: play %s(path,sound.mp3)",
+             "playsound.playsound({path})", ["playsound"]),
+    ],
 }
 
 # pip name -> the name you actually import
@@ -5013,10 +5671,15 @@ PACKAGE_CATALOGUE = [
     ("plotly", "Interactive charts in a browser", "window"),
     ("seaborn", "Prettier statistical charts", "window"),
     ("wordcloud", "Make word cloud pictures", "good"),
-    ("gtts", "Turn text into speech using Google", "good"),
-    ("pyttsx3", "Speak text out loud offline", "good"),
-    ("playsound", "Play a sound file", "good"),
+    ("gtts", "Turn text into speech using Google (the Sound tab already "
+             "speaks without it)", "blocks"),
+    ("pyttsx3", "Speak text out loud offline (the Sound tab already does "
+                "this with nothing installed)", "blocks"),
+    ("playsound", "Play a sound file (the Sound blocks already do)", "blocks"),
     ("pydub", "Cut and join audio", "good"),
+    ("sounddevice", "Record from the microphone and play raw audio", "device"),
+    ("simpleaudio", "Play sounds without waiting for them", "good"),
+    ("mido", "Read and write MIDI files", "good"),
     ("moviepy", "Edit video", "tricky"),
     ("opencv-python", "See and change images from a camera", "window"),
     ("imageio", "Read and write images and gifs", "good"),
@@ -6030,7 +6693,7 @@ class App:
             style.theme_use("clam")
             style.configure("TFrame", background=UI["panel"])
             style.configure("TNotebook", background=UI["panel"], borderwidth=0)
-            style.configure("TNotebook.Tab", padding=(14, 6),
+            style.configure("TNotebook.Tab", padding=(10, 6),
                             font=(FONT_FAMILY, 9))
             style.configure("TPanedwindow", background=UI["border"])
         except Exception:
@@ -6048,6 +6711,9 @@ class App:
         self.console.write("sys", "Python files are written to %s"
                            % self.project.folder())
         self.pump()
+        # ask the computer what voices it has once the window is up, so the
+        # "set voice to" dropdown lists real names
+        root.after(1500, lambda: load_voices(self))
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # -- construction ------------------------------------------------------- #
@@ -6155,18 +6821,37 @@ class App:
         right = ttk.Notebook(upper, width=360)
         self.code_pane = CodePane(right, self)
         self.files_pane = FilesPane(right, self)
+        self.sound_pane = SoundPane(right, self)
         self.packages_pane = PackagesPane(right, self)
         right.add(self.code_pane, text="Python code")
-        right.add(self.files_pane, text="Files and data")
+        right.add(self.files_pane, text="Files")
+        right.add(self.sound_pane, text="Sound")
         right.add(self.packages_pane, text="Packages")
         upper.add(right, weight=1)
         self.right_nb = right
+        right.bind("<<NotebookTabChanged>>", self.on_right_tab)
 
         self.console = ConsolePane(outer, self)
         outer.add(self.console, weight=0)
         self.root.after(150, self.init_sashes)
         self.root.bind("<Map>", lambda e: self.root.after(60, self.init_sashes))
         self.root.bind("<Configure>", self.on_resize)
+
+    def on_right_tab(self, ev=None):
+        """The Sound tab looks up the computer's voices the first time."""
+        try:
+            if self.right_nb.select() == str(self.sound_pane):
+                self.sound_pane.first_look()
+        except Exception:
+            pass
+
+    def open_sound(self):
+        """Bring up the sound tab and get it ready to make a noise."""
+        try:
+            self.right_nb.select(self.sound_pane)
+        except Exception:
+            pass
+        self.sound_pane.first_look()
 
     def on_resize(self, ev=None):
         """Let the category strip grow a little on a bigger window."""
@@ -6202,7 +6887,7 @@ class App:
                 return
             grow = max(1.0, min(1.45, min(width / 1440.0, height / 900.0)))
             self.outer.sashpos(0, int(height * 0.80))
-            self.upper.sashpos(0, int(396 * grow))
+            self.upper.sashpos(0, int(414 * grow))
             self.upper.sashpos(1, max(560, width - int(372 * grow)))
             self._sashes_done = True
         except Exception:
@@ -6234,6 +6919,7 @@ class App:
                      ("Stop", self.stop),
                      None,
                      ("Try a web request...", self.web_tester),
+                     ("Sound studio...", self.open_sound),
                      ("Show generated code", lambda: self.show_tab(0))]),
             ("Packages", [("Browse packages...", self.browse_packages),
                           ("Package dashboard", self.open_packages),
@@ -6327,14 +7013,15 @@ class App:
     def status(self, message: str):
         self.status_var.set(message)
 
-    def show_tab(self, index: int):
+    def show_tab(self, which):
+        """Bring a side panel to the front, by number or by the panel itself."""
         try:
-            self.right_nb.select(index)
+            self.right_nb.select(which)
         except Exception:
             pass
 
     def open_packages(self):
-        self.show_tab(2)
+        self.show_tab(self.packages_pane)
         if not self.packages_pane.installed:
             self.packages_pane.refresh_list()
 
@@ -6345,7 +7032,7 @@ class App:
             "(anything you can import: turtle, math, requests, numpy ...)",
             parent=self.root)
         if name:
-            self.show_tab(2)
+            self.show_tab(self.packages_pane)
             self.packages_pane.make_blocks_for_module(name.strip(),
                                                       name.strip())
 
@@ -6656,7 +7343,7 @@ class App:
                 "This program uses:\n\n    %s\n\n"
                 "Install them and make blocks for them now?" % listing):
             return
-        self.show_tab(2)
+        self.show_tab(self.packages_pane)
         self.install_queue = list(names)
         self.install_next()
 
@@ -7107,6 +7794,10 @@ class App:
             "   start from their starting values each time.\n"
             "5. 'Code folder' at the top opens the folder those .py\n"
             "   files are written into.\n\n"
+            "Sound\n"
+            "   The Sound tab on the right speaks, plays notes and drums,\n"
+            "   and tests your speakers. Nothing is installed for it: it\n"
+            "   uses the voice this computer already has.\n\n"
             "Bringing code in\n"
             "   'Import .py' turns any Python file into blocks, and\n"
             "   offers to install the packages it needs.\n\n"
@@ -7158,6 +7849,364 @@ def web_runtime() -> Dict[str, Any]:
         exec(HELPERS["web"], namespace)
         _WEB_RUNTIME.update(namespace)
     return _WEB_RUNTIME
+
+
+_SOUND_RUNTIME: Dict[str, Any] = {}
+
+
+def sound_runtime() -> Dict[str, Any]:
+    """The same speaking and playing helpers the generated programs use.
+
+    Built by running the block library's own source, so what you hear in the
+    Sound tab is exactly what your blocks will do.
+    """
+    if not _SOUND_RUNTIME:
+        import array
+        import atexit
+        import base64
+        import random
+        import tempfile
+        import wave
+        namespace: Dict[str, Any] = {
+            "os": os, "sys": sys, "subprocess": subprocess, "shutil": shutil,
+            "tempfile": tempfile, "time": time, "wave": wave, "atexit": atexit,
+            "array": array, "math": math, "random": random, "base64": base64}
+        for part in ("sound", "tone", "speech"):
+            exec(HELPERS[part], namespace)
+        # the studio should not sit and wait for a sound when you close it
+        try:
+            atexit.unregister(namespace["wait_for_sounds"])
+        except Exception:
+            pass
+        _SOUND_RUNTIME.update(namespace)
+    return _SOUND_RUNTIME
+
+
+def speech_engine_name() -> str:
+    """What this computer will speak with, in words a person understands."""
+    if IS_WINDOWS:
+        return "the Windows voices"
+    if sys.platform == "darwin":
+        return "the macOS 'say' voice"
+    for tool in ("espeak-ng", "espeak", "spd-say"):
+        if shutil.which(tool):
+            return tool
+    return ""
+
+
+def load_voices(app: "App"):
+    """Ask the computer what voices it has, without holding the window up."""
+    def worker():
+        try:
+            found = sound_runtime()["voice_names"]()
+        except Exception:
+            found = []
+        def done():
+            if found and found != VOICE_CACHE:
+                VOICE_CACHE[:] = found
+                try:
+                    app.palette.rebuild()
+                except Exception:
+                    pass
+            try:
+                app.sound_pane.voices_arrived(found)
+            except Exception:
+                pass
+        app.ui(done)
+    threading.Thread(target=worker, daemon=True).start()
+
+
+class SoundPane(ttk.Frame):
+    """Hear something straight away - and find out why you cannot."""
+
+    NOTES = ["C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5"]
+
+    def __init__(self, master, app: "App"):
+        super().__init__(master)
+        self.app = app
+        self.busy = False
+        self.asked = False
+        pink, deep = CATS["sound"]["color"], CATS["sound"]["dark"]
+
+        # everything lives on a canvas so the whole tab can scroll: on a short
+        # window the buttons at the bottom would otherwise be out of reach
+        self.canvas = tk.Canvas(self, bg=UI["panel"], highlightthickness=0)
+        bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        body = tk.Frame(self.canvas, bg=UI["panel"])
+        holder = self.canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda e: self.canvas.configure(
+            scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
+            holder, width=e.width))
+
+        head = tk.Frame(body, bg=UI["panel"])
+        head.pack(fill="x", padx=10, pady=(10, 0))
+        tk.Label(head, text="Sound and speech", bg=UI["panel"], fg=deep,
+                 font=(FONT_FAMILY, 11, "bold")).pack(anchor="w")
+        self.engine = tk.Label(head, text="", bg=UI["panel"], fg="#8A93A5",
+                               font=(FONT_FAMILY, 8), anchor="w",
+                               justify="left", wraplength=310)
+        self.engine.pack(anchor="w", fill="x")
+
+        tk.Button(body, text="Can you hear this?  Test my speakers",
+                  command=self.test_speakers, relief="flat", bd=0, bg=pink,
+                  fg="#FFFFFF", activebackground=deep,
+                  activeforeground="#FFFFFF", cursor="hand2",
+                  font=(FONT_FAMILY, 9, "bold"), pady=6).pack(fill="x", padx=10,
+                                                              pady=(8, 3))
+
+        # the answer to "did that work?" belongs next to the buttons that ask
+        self.status = tk.Label(body, text="", bg=UI["panel"], fg="#8A93A5",
+                               font=(FONT_FAMILY, 9), anchor="w",
+                               justify="left", wraplength=300)
+        self.status.pack(fill="x", padx=10)
+
+        tk.Label(body, text="Say something out loud", bg=UI["panel"],
+                 fg=UI["text"], font=(FONT_FAMILY, 9, "bold")).pack(
+                     anchor="w", padx=10, pady=(6, 2))
+        self.text = tk.Text(body, height=2, font=(FONT_FAMILY, 10), bg="#FFFFFF",
+                            relief="flat", padx=6, pady=4, wrap="word",
+                            highlightthickness=1,
+                            highlightbackground=UI["border"])
+        self.text.insert("1.0", "Hello! I am ScratchPy Studio.")
+        self.text.pack(fill="x", padx=10)
+
+        row = tk.Frame(body, bg=UI["panel"])
+        row.pack(fill="x", padx=10, pady=6)
+        self.say_btn = tk.Button(row, text="Say it", command=self.say_it,
+                                 relief="flat", bd=0, bg=pink, fg="#FFFFFF",
+                                 activebackground=deep,
+                                 activeforeground="#FFFFFF", cursor="hand2",
+                                 font=(FONT_FAMILY, 9, "bold"), padx=18, pady=4)
+        self.say_btn.pack(side="left")
+        for label, cmd in (("Stop", self.stop_sound),
+                           ("Save as .wav...", self.save_wav)):
+            tk.Button(row, text=label, command=cmd, relief="flat", bd=0,
+                      bg="#EEF1F6", fg=UI["text"], font=(FONT_FAMILY, 9),
+                      cursor="hand2", padx=10, pady=4,
+                      activebackground="#DDE3EC").pack(side="left", padx=(6, 0))
+
+        grid = tk.Frame(body, bg=UI["panel"])
+        grid.pack(fill="x", padx=10)
+        grid.columnconfigure(1, weight=1)
+        tk.Label(grid, text="Voice", bg=UI["panel"], fg=UI["text"],
+                 font=(FONT_FAMILY, 9)).grid(row=0, column=0, sticky="w")
+        self.voice_var = tk.StringVar(value="default")
+        self.voice_box = ttk.Combobox(grid, textvariable=self.voice_var,
+                                      values=["default"], state="readonly",
+                                      font=(FONT_FAMILY, 9))
+        self.voice_box.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=3)
+
+        def slider(row, text, low, high, start):
+            tk.Label(grid, text=text, bg=UI["panel"], fg=UI["text"],
+                     font=(FONT_FAMILY, 9)).grid(row=row, column=0, sticky="w")
+            bar = tk.Scale(grid, from_=low, to=high, orient="horizontal",
+                           bg=UI["panel"], fg=UI["text"], highlightthickness=0,
+                           troughcolor="#EEF1F6", bd=0, sliderrelief="flat",
+                           font=(FONT_FAMILY, 8), sliderlength=18, width=11,
+                           length=160)
+            bar.set(start)
+            bar.grid(row=row, column=1, sticky="ew", padx=(8, 0))
+            return bar
+
+        self.speed = slider(1, "Speed", -10, 10, 0)
+        self.loud = slider(2, "Volume", 0, 100, 100)
+
+        tk.Label(body, text="Play a note", bg=UI["panel"], fg=UI["text"],
+                 font=(FONT_FAMILY, 9, "bold")).pack(anchor="w", padx=10,
+                                                     pady=(6, 2))
+        keys = tk.Frame(body, bg=UI["panel"])
+        keys.pack(fill="x", padx=10)
+        for note in self.NOTES:
+            tk.Button(keys, text=note[0], width=2, relief="flat", bd=1,
+                      bg="#FFFFFF", fg=UI["text"], font=(FONT_FAMILY, 9),
+                      cursor="hand2", activebackground=hexlight(pink, 0.6),
+                      command=lambda n=note: self.play_note(n)).pack(
+                          side="left", padx=1)
+        tk.Button(keys, text="drum", relief="flat", bd=1, bg="#FFFFFF",
+                  fg=UI["text"], font=(FONT_FAMILY, 8), cursor="hand2",
+                  activebackground=hexlight(pink, 0.6),
+                  command=self.play_drum).pack(side="left", padx=(8, 0))
+
+        tk.Button(body, text="Put these blocks in my project",
+                  command=self.to_blocks, relief="flat", bd=0, bg=UI["accent"],
+                  fg="#FFFFFF", activebackground="#3373CC",
+                  activeforeground="#FFFFFF", cursor="hand2",
+                  font=(FONT_FAMILY, 9, "bold"), pady=5).pack(
+                      fill="x", padx=10, pady=(8, 4))
+
+        self.help = tk.Label(
+            body, bg="#FDF3F9", fg="#8A5F78", font=(FONT_FAMILY, 8),
+            anchor="w", justify="left", wraplength=290, padx=8, pady=5,
+            text="Nothing is installed for any of this - it uses the voice "
+                 "and the speaker this computer already has. Heard nothing? "
+                 "Check the speaker beside the clock is not muted, and that "
+                 "the headphones you are wearing are the ones chosen there.")
+        self.help.pack(fill="x", padx=10, pady=(8, 8))
+        self.wheel_everywhere(body)
+
+    # -- helpers ------------------------------------------------------------- #
+
+    def wheel_everywhere(self, widget):
+        """The wheel should scroll the tab wherever the pointer happens to be."""
+        widget.bind("<MouseWheel>", self.on_wheel)
+        for child in widget.winfo_children():
+            if isinstance(child, (tk.Scale, ttk.Combobox, tk.Text)):
+                continue          # these use the wheel themselves
+            self.wheel_everywhere(child)
+
+    def on_wheel(self, ev):
+        self.canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units")
+        return "break"
+
+    def first_look(self):
+        """Called the first time the tab is opened."""
+        if not self.asked:
+            self.asked = True
+            self.refresh_engine()
+            load_voices(self.app)
+
+    def refresh_engine(self):
+        name = speech_engine_name()
+        if name:
+            count = len(VOICE_CACHE)
+            self.engine.configure(
+                text="Speaking with %s%s." %
+                     (name, " - %d voice%s found" % (count, "" if count == 1
+                                                     else "s") if count else ""),
+                fg="#8A93A5")
+        else:
+            self.engine.configure(
+                text="No voice found on this computer. Tones and sound files "
+                     "still work. On Linux:  sudo apt install espeak-ng",
+                fg="#B36B00")
+
+    def voices_arrived(self, names: List[str]):
+        values = ["default"] + [n for n in names if n]
+        self.voice_box.configure(values=values)
+        if self.voice_var.get() not in values:
+            self.voice_var.set("default")
+        self.refresh_engine()
+
+    def sound_job(self, work: Callable[[Dict[str, Any]], Any], busy: str,
+                  good: str):
+        """Make a noise on a background thread so the window stays alive."""
+        if self.busy:
+            return
+        self.busy = True
+        self.say_btn.configure(state="disabled")
+        self.status.configure(text=busy, fg="#8A93A5")
+        # the sliders are read here, on the main thread: a worker thread must
+        # never touch a tkinter widget
+        loud, speed = self.loud.get(), self.speed.get()
+        voice = self.voice_var.get()
+
+        def worker():
+            try:
+                runtime = sound_runtime()
+                runtime["set_volume"](loud)
+                runtime["set_speech_speed"](speed)
+                runtime["set_voice"](voice)
+                work(runtime)
+                trouble = ""
+            except Exception as exc:
+                trouble = "%s" % exc or type(exc).__name__
+            self.app.ui(lambda: self.finished(trouble, good))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finished(self, trouble: str, good: str):
+        self.busy = False
+        try:
+            self.say_btn.configure(state="normal")
+        except Exception:
+            return
+        if trouble:
+            self.status.configure(text="It could not: " + trouble,
+                                  fg=UI["danger"])
+        else:
+            self.status.configure(text=good, fg="#2E9E5B")
+
+    # -- the buttons --------------------------------------------------------- #
+
+    def test_speakers(self):
+        def work(runtime):
+            for note in ("C4", "E4", "G5"):
+                runtime["play_note"](note, 0.4)
+        self.sound_job(work, "Playing three notes...",
+                       "Three notes played. If you heard nothing, the sound "
+                       "is muted or going somewhere else.")
+
+    def say_it(self):
+        words = self.text.get("1.0", "end-1c").strip()
+        if not words:
+            self.status.configure(text="Type something to say first.",
+                                  fg="#8A93A5")
+            return
+        self.sound_job(lambda runtime: runtime["speak"](words),
+                       "Speaking...", "Said it.")
+
+    def play_note(self, note: str):
+        self.sound_job(lambda runtime: runtime["play_note"](note, 0.5),
+                       "Playing %s..." % note, "Played %s." % note)
+
+    def play_drum(self):
+        self.sound_job(lambda runtime: runtime["play_drum"]("snare", 0.25),
+                       "Drum...", "Played a snare drum.")
+
+    def stop_sound(self):
+        try:
+            sound_runtime()["stop_all_sounds"]()
+        except Exception:
+            pass
+        self.status.configure(text="Stopped.", fg="#8A93A5")
+
+    def save_wav(self):
+        words = self.text.get("1.0", "end-1c").strip()
+        if not words:
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Save the speech", defaultextension=".wav",
+            initialdir=self.app.project.folder(), initialfile="speech.wav",
+            filetypes=[("Sound file", "*.wav")])
+        if not path:
+            return
+        self.sound_job(lambda runtime: runtime["save_speech"](words, path),
+                       "Writing the file...", "Saved " + os.path.basename(path))
+
+    def to_blocks(self):
+        """Drop blocks into the workspace that do exactly what was just heard."""
+        words = self.text.get("1.0", "end-1c").strip() or "hello"
+        first = last = None
+
+        def add(block):
+            nonlocal first, last
+            if last is None:
+                first = last = block
+            else:
+                last.attach_next(block)
+                last = block
+
+        if self.voice_var.get() not in ("", "default"):
+            voice = Block(SPECS["sound_voice"])
+            voice.fields["voice"] = self.voice_var.get()
+            add(voice)
+        if int(self.speed.get()) != 0:
+            speed = Block(SPECS["sound_speed"])
+            speed.values["speed"] = str(int(self.speed.get()))
+            add(speed)
+        if int(self.loud.get()) != 100:
+            loud = Block(SPECS["sound_volume_set"])
+            loud.values["percent"] = str(int(self.loud.get()))
+            add(loud)
+        talk = Block(SPECS["sound_speak"])
+        talk.values["text"] = words
+        add(talk)
+        self.app.workspace.add_block(first)
+        self.app.categories.select("sound")
+        self.app.status("Added the sound blocks to the workspace.")
 
 
 class WebTesterDialog:
@@ -7605,7 +8654,7 @@ class PackageBrowser:
         if not name:
             self.details.configure(text="Pick something from the list first.")
             return
-        self.app.show_tab(2)
+        self.app.show_tab(self.app.packages_pane)
         self.app.packages_pane.pkg_var.set(name)
         self.app.packages_pane.install()
         self.top.destroy()
@@ -7614,7 +8663,7 @@ class PackageBrowser:
         name = self.chosen()
         if not name:
             return
-        self.app.show_tab(2)
+        self.app.show_tab(self.app.packages_pane)
         self.app.packages_pane.make_blocks_for_dist(name)
         self.top.destroy()
 
@@ -7968,7 +9017,7 @@ class SettingsDialog:
 
     def create(self):
         folder = self.folder()
-        self.app.show_tab(2)
+        self.app.show_tab(self.app.packages_pane)
         self.app.packages_pane.write("Creating a virtual environment...")
 
         def done(code):
@@ -7993,7 +9042,7 @@ class SettingsDialog:
             if messagebox.askyesno(
                     "Virtual environment",
                     "The venv does not exist yet. Create it now?"):
-                self.app.show_tab(2)
+                self.app.show_tab(self.app.packages_pane)
                 self.app.packages_pane.write("Creating a virtual environment...")
                 self.app.packages.make_venv(
                     self.app.venv_folder(), self.app.packages_pane.write,

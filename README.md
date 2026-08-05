@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-4C97FF?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-59C059)](#)
-[![One file](https://img.shields.io/badge/one%20file-7%2C000%20lines-FFAB19)](scratchpy_studio.py)
+[![One file](https://img.shields.io/badge/one%20file-9%2C700%20lines-FFAB19)](scratchpy_studio.py)
 [![Build](https://github.com/ZDStudios/scratchpy-studio/actions/workflows/build-apps.yml/badge.svg)](https://github.com/ZDStudios/scratchpy-studio/actions/workflows/build-apps.yml)
 [![Download](https://img.shields.io/badge/download-windows%20%7C%20macos%20%7C%20linux-855CD6)](https://github.com/ZDStudios/scratchpy-studio/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-0FBD8C)](LICENSE)
@@ -49,11 +49,12 @@ and hand in.
 
 |  | |
 |---|---|
-| 🧩 **148 blocks** | Hat blocks, C-shaped loops, hexagonal booleans, reporter ovals that drop into slots — the real Scratch 3 shapes and colours |
+| 🧩 **177 blocks** | Hat blocks, C-shaped loops, hexagonal booleans, reporter ovals that drop into slots — the real Scratch 3 shapes and colours |
 | 🐍 **Real Python, live** | The generated source updates as you drag. No hidden interpreter |
 | ▶️ **It actually runs** | `print`, `input`, errors and a stop button, all wired to the built-in console |
 | 👆 **Click a block to try it** | A loose block runs on its own and reports what it printed in a bubble underneath |
 | 🌐 **Talks to the web out of the box** | GET, POST, headers, JSON, downloads — using `urllib` from the standard library, so there is nothing to install |
+| 🔊 **It talks** | A Sound category that speaks, plays notes and beats drums — using the voice and speaker the computer already has |
 | 📥 **Import any `.py`** | Turn a program you already have into blocks — loops, functions, try/except, f-strings and all |
 | 📦 **Every PyPI package** | pip dashboard installs anything and turns it into blocks automatically |
 | 🤖 **Works with AI** | Built-in MCP server so an assistant can build blocks alongside you |
@@ -144,6 +145,56 @@ this** then drops the matching blocks straight into your workspace.
 
 The tester runs the *same* helper functions your blocks compile to, so what you
 test is exactly what your program will do.
+
+---
+
+## It talks. Nothing installed.
+
+Every computer already has a voice and a speaker — the trouble is that each one
+reaches them a different way. Windows has the voices behind Narrator, macOS has
+`say`, Linux has `espeak`. The **Sound** category hides the difference, so one
+block works on all three.
+
+<div align="center">
+<img src="docs/screenshot-sound.png" width="900" alt="The Sound category and the Sound tab">
+</div>
+
+| Block | What it does |
+|---|---|
+| `say [hello] out loud` | Speaks, and waits until the sentence is finished |
+| `start saying [hello]` | Speaks while the program carries on |
+| `set voice to (▾)` | The dropdown lists the voices *this* computer really has |
+| `set speaking speed to (0)` | −10 is very slow, 10 is very fast |
+| `save speech [hello] to [speech.wav]` | Keeps it as a real sound file |
+| `play note (C4▾) for (0.5) beats` | Middle C is `C4` or `60`; `F#3` and `Bb4` work too |
+| `play drum (snare▾) for (0.25) beats` | Twelve drums, synthesised from scratch |
+| `play (440) Hz for (0.5) seconds` | Any frequency, plus sine, square, saw, triangle and noise |
+| `set tempo to (120) beats a minute` · `rest for (0.25) beats` | Music timing, the way Scratch does it |
+| `play sound [sound.wav]` · `start sound [sound.wav]` | Your own files — `.wav` everywhere, `.mp3` on Windows and macOS |
+| `stop all sounds` · `set volume to (100) percent` | Silence, and loudness |
+
+Tones, notes and drums are worked out one sample at a time and written as real
+`.wav` files, so there is no synthesiser to install either. Each one is
+calculated once and then reused, so a note inside a loop stays fast.
+
+### Can you hear this?
+
+The **Sound** tab on the right is a place to make a noise *now*, before you have
+built anything:
+
+- **Test my speakers** plays three notes. If you hear nothing, the problem is
+  the mute switch or the output device, not your program — and it says so.
+- Type a sentence, pick a voice, drag the speed and volume, press **Say it**.
+- A little keyboard for trying notes and a drum.
+- **Put these blocks in my project** drops blocks that do exactly what you just
+  heard, sliders and all.
+
+It runs the *same* helper functions your blocks compile to, so what you hear in
+the tab is what your program will do.
+
+> Using `pyttsx3` instead? Its catch is that nothing is heard until
+> `runAndWait()` is called. ScratchPy now ships hand-written blocks for it that
+> always do both — as it does for `gtts` and `playsound`.
 
 ---
 
@@ -357,7 +408,7 @@ writes a tidy module with a `main()` and an `if __name__ == "__main__":` guard.
 python scratchpy_studio.py --selftest
 ```
 
-Builds the entire interface head-lessly, then **compiles every one of the 148
+Builds the entire interface head-lessly, then **compiles every one of the 177
 blocks**, checks the block definitions are well formed, round-trips a project
 through save and load, exercises the Python importer and the MCP server, and
 finally runs the generated example program and checks its output.
