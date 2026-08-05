@@ -9,7 +9,8 @@
 [![Python](https://img.shields.io/badge/python-3.9%2B-4C97FF?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-59C059)](#)
 [![One file](https://img.shields.io/badge/one%20file-6%2C700%20lines-FFAB19)](scratchpy_studio.py)
-[![Platform](https://img.shields.io/badge/windows%20%7C%20macos%20%7C%20linux-855CD6)](#build-a-standalone-app)
+[![Build](https://github.com/ZDStudios/scratchpy-studio/actions/workflows/build-apps.yml/badge.svg)](https://github.com/ZDStudios/scratchpy-studio/actions/workflows/build-apps.yml)
+[![Download](https://img.shields.io/badge/download-windows%20%7C%20macos%20%7C%20linux-855CD6)](https://github.com/ZDStudios/scratchpy-studio/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-0FBD8C)](LICENSE)
 
 <img src="docs/screenshot-editor.png" width="900" alt="The ScratchPy Studio editor">
@@ -142,9 +143,17 @@ That is the whole install. No pip, no virtualenv, no build step.
 
 ### Or grab the app
 
-Download `ScratchPyStudio.exe` from the
-[latest release](../../releases/latest) and double-click it. It carries its own
-Python, so it runs your block programs even on a computer that has none.
+No Python at all? Take one from the
+[latest release](https://github.com/ZDStudios/scratchpy-studio/releases/latest):
+
+| Platform | File | How to run it |
+|---|---|---|
+| **Windows** | `ScratchPyStudio.exe` | Double-click it |
+| **macOS** | `ScratchPy-Studio-macOS.zip` | Unzip, then right-click → *Open* the first time |
+| **Linux** | `ScratchPy-Studio-Linux.zip` | Unzip, `chmod +x ScratchPyStudio`, run it |
+
+Each build carries its own Python, so your block programs run even on a machine
+that has none. (Installing packages with pip still wants a normal Python.)
 
 ### Other switches
 
