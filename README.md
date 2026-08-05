@@ -53,6 +53,25 @@ and hand in.
 
 ---
 
+## One drawer, gliding between sections
+
+Every category lives in one continuous list, the way Scratch does it. Clicking a
+category glides the drawer to that section instead of swapping the list out, and
+scrolling by hand moves the highlight along with you.
+
+<div align="center">
+<img src="docs/screenshot-palette.png" width="900" alt="The palette, mid-glide between sections">
+</div>
+
+The rest of the app moves too, in small ways that are meant to be felt rather
+than watched: the highlight slides between categories, blocks flash softly where
+they click together, a deleted block shrinks away into the palette, report
+bubbles pop in, and the green flag has a gentle heartbeat while your program
+runs. A full rebuild of the whole drawer takes about 40 ms, so none of it gets in
+your way — and **Settings** has a switch to turn all of it off.
+
+---
+
 ## Click a block to try it
 
 Blocks lying loose on the canvas are a scratch pad. Click one and it runs on its

@@ -48,7 +48,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 APP_NAME = "ScratchPy Studio"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 PROJECT_EXT = ".spy"
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -3238,17 +3238,83 @@ class WorkspaceView(ttk.Frame):
         self.drag = None
         self.canvas.delete("snaphint")
         if self.app.over_palette(xr, yr):
-            self.file.remove_script(b)
-            self.refresh()
-            self.app.on_change()
-            self.app.status("Block deleted.")
+            self.vanish(b)
             return
         if target:
             self.apply_target(b, target)
         self.refresh()
         self.app.on_change()
+        if target:
+            self.flash_join(target)
         if clicked:
             self.click_block(b)
+
+    # -- little animations -------------------------------------------------- #
+
+    def vanish(self, block: Block):
+        """Shrink a block away when it is dropped back on the palette.
+
+        The block leaves the project straight away; only the pixels linger,
+        so nothing can read a document that still holds a deleted block.
+        """
+        self.canvas.delete("ghost")
+        rect = self.L.rect.get(block.id)
+        cx = rect[0] if rect else block.x
+        cy = rect[1] if rect else block.y
+        ghosts = list(self.canvas.find_withtag("root:" + block.id))
+        for item in ghosts:
+            self.canvas.dtag(item, "block")      # survives the redraw below
+            self.canvas.addtag_withtag("ghost", item)
+
+        self.file.remove_script(block)
+        self.refresh()
+        self.app.on_change()
+        self.app.status("Block deleted.")
+
+        if not ghosts or not self.app.animations_on():
+            self.canvas.delete("ghost")
+            return
+        state = {"scale": 1.0}
+
+        def step(t):
+            wanted = max(0.05, 1.0 - 0.95 * t)
+            factor = wanted / state["scale"]
+            state["scale"] = wanted
+            try:
+                self.canvas.scale("ghost", cx, cy, factor, factor)
+            except Exception:
+                pass
+        self.app.anim.play("vanish", 0.16, step,
+                           lambda: self.canvas.delete("ghost"))
+
+    def flash_join(self, target: dict):
+        """A quick pale flash where two blocks just clicked together."""
+        if not self.app.animations_on():
+            return
+        z = self.renderer.scale
+        x, y = target["x"], target["y"]
+        if target["kind"] == "slot":
+            x0, y0 = x - 3, y - 3
+            x1, y1 = x + target["w"] + 3, y + target["h"] + 3
+        else:
+            x0, y0 = x + 2, y - 4 * z
+            x1, y1 = x + 92 * z, y + 4 * z
+        item = self.canvas.create_rectangle(x0, y0, x1, y1, outline="",
+                                            fill="#FFFFFF", tags="joinflash")
+
+        def step(t):
+            try:
+                self.canvas.itemconfigure(
+                    item, fill=blend("#FFFFFF", UI["canvas_bg"], t))
+            except Exception:
+                pass
+
+        def done():
+            try:
+                self.canvas.delete(item)
+            except Exception:
+                pass
+        self.app.anim.play("joinflash", 0.26, step, done)
 
     # -- click a loose block to try it -------------------------------------- #
 
@@ -3426,6 +3492,20 @@ class WorkspaceView(ttk.Frame):
                                     font=(FONT_FAMILY, max(7, int(8 * z))),
                                     fill="#8A93A5", tags=tag)
         self.canvas.tag_raise(tag)
+        if self.app.animations_on():
+            # a small pop, so the answer catches your eye
+            state = {"scale": 0.82}
+            self.canvas.scale(tag, bx, by, 0.82, 0.82)
+
+            def step(t):
+                wanted = 0.82 + 0.18 * t
+                factor = wanted / state["scale"]
+                state["scale"] = wanted
+                try:
+                    self.canvas.scale(tag, bx, by, factor, factor)
+                except Exception:
+                    pass
+            self.app.anim.play("bubble", 0.14, step)
 
     # -- snapping ----------------------------------------------------------- #
 
@@ -3824,6 +3904,67 @@ class WorkspaceView(ttk.Frame):
 #  SECTION 9 - the palette: category strip + block drawer
 # =========================================================================== #
 
+class Animator:
+    """Short, cancellable animations driven by the tkinter event loop."""
+
+    FPS = 60
+
+    def __init__(self, widget: tk.Misc):
+        self.widget = widget
+        self.jobs: Dict[str, str] = {}
+
+    def cancel(self, key: str):
+        job = self.jobs.pop(key, None)
+        if job:
+            try:
+                self.widget.after_cancel(job)
+            except Exception:
+                pass
+
+    def play(self, key: str, seconds: float, step: Callable[[float], None],
+             done: Optional[Callable[[], None]] = None):
+        """Call step() with 0..1 eased, then done(). Replaces any run of the
+        same key, so a second click never fights the first."""
+        self.cancel(key)
+        frames = max(1, int(seconds * self.FPS))
+        delay = max(8, int(1000 / self.FPS))
+
+        def tick(frame: int = 0):
+            fraction = min(1.0, frame / frames)
+            eased = 1.0 - (1.0 - fraction) ** 3          # ease out, snappy
+            try:
+                step(eased)
+            except Exception:
+                self.jobs.pop(key, None)
+                return
+            if frame >= frames:
+                self.jobs.pop(key, None)
+                if done is not None:
+                    try:
+                        done()
+                    except Exception:
+                        pass
+                return
+            try:
+                self.jobs[key] = self.widget.after(delay, tick, frame + 1)
+            except Exception:
+                self.jobs.pop(key, None)
+
+        tick(0)
+
+
+def blend(start: str, end: str, t: float) -> str:
+    """Mix two #rrggbb colours - the closest thing a canvas has to fading."""
+    t = max(0.0, min(1.0, t))
+    a = start.lstrip("#")
+    b = end.lstrip("#")
+    out = []
+    for i in (0, 2, 4):
+        first, second = int(a[i:i + 2], 16), int(b[i:i + 2], 16)
+        out.append(int(round(first + (second - first) * t)))
+    return "#%02X%02X%02X" % tuple(out)
+
+
 class CategoryStrip(tk.Canvas):
     """The narrow column of coloured category buttons."""
 
@@ -3833,6 +3974,7 @@ class CategoryStrip(tk.Canvas):
         super().__init__(master, width=76, bg=UI["panel"], highlightthickness=0)
         self.app = app
         self.selected = "events"
+        self.marker = 0.0            # where the highlight is, in pixels
         self.bind("<Button-1>", self.on_click)
         self.bind("<Configure>", lambda e: self.redraw())
         self.bind("<MouseWheel>",
@@ -3844,24 +3986,46 @@ class CategoryStrip(tk.Canvas):
             self.select(CAT_ORDER[idx])
 
     def select(self, cat: str):
-        self.selected = cat
-        self.redraw()
+        self.highlight(cat)
         self.app.palette.show_category(cat)
+
+    def highlight(self, cat: str):
+        """Slide the highlight to a category without touching the drawer."""
+        if cat not in CATS:
+            return
+        self.selected = cat
+        target = CAT_ORDER.index(cat) * self.ITEM_H
+        if not self.app.animations_on():
+            self.marker = target
+            self.redraw()
+            return
+        start = self.marker
+        self.app.anim.play(
+            "strip", 0.22,
+            lambda t: self.move_marker(start + (target - start) * t))
+
+    def move_marker(self, y: float):
+        self.marker = y
+        self.redraw()
 
     def redraw(self):
         self.delete("all")
+        info = CATS.get(self.selected, CATS["events"])
+        self.create_rectangle(0, self.marker, 76, self.marker + self.ITEM_H,
+                              fill="#F0F2F6", outline="")
+        self.create_rectangle(0, self.marker + 4, 4, self.marker + self.ITEM_H - 4,
+                              fill=info["color"], outline="")
         for i, cat in enumerate(CAT_ORDER):
-            info = CATS[cat]
+            shade = CATS[cat]
             y = i * self.ITEM_H
-            if cat == self.selected:
-                self.create_rectangle(0, y, 76, y + self.ITEM_H,
-                                      fill="#F0F2F6", outline="")
-                self.create_rectangle(0, y, 3, y + self.ITEM_H,
-                                      fill=info["color"], outline="")
-            self.create_oval(29, y + 7, 47, y + 25, fill=info["color"],
-                             outline=info["dark"], width=1)
-            self.create_text(38, y + 36, text=info["name"], anchor="center",
-                             fill=UI["text"], font=(FONT_FAMILY, 8))
+            grown = 1.0 if cat == self.selected else 0.0
+            r = 9 + 1.5 * grown
+            self.create_oval(38 - r, y + 16 - r, 38 + r, y + 16 + r,
+                             fill=shade["color"], outline=shade["dark"], width=1)
+            self.create_text(38, y + 36, text=shade["name"], anchor="center",
+                             fill=UI["text"] if cat == self.selected else "#8A93A5",
+                             font=(FONT_FAMILY, 8,
+                                   "bold" if cat == self.selected else "normal"))
         self.configure(scrollregion=(0, 0, 76,
                                      len(CAT_ORDER) * self.ITEM_H + 4))
 
@@ -3877,6 +4041,7 @@ class PaletteView(ttk.Frame):
         self.protos: Dict[str, Block] = {}
         self.press: Optional[dict] = None
         self.widgets: List[tk.Widget] = []
+        self.section_y: Dict[str, float] = {}
 
         self._ph_text = "Search blocks..."
         top = tk.Frame(self, bg=UI["palette_bg"])
@@ -3896,7 +4061,7 @@ class PaletteView(ttk.Frame):
                                   command=self.canvas.yview)
         self.hbar = ttk.Scrollbar(body, orient="horizontal",
                                   command=self.canvas.xview)
-        self.canvas.configure(yscrollcommand=self.vbar.set,
+        self.canvas.configure(yscrollcommand=self.on_yview,
                               xscrollcommand=self.hbar.set)
         self.vbar.grid(row=0, column=1, sticky="ns")
         self.hbar.grid(row=1, column=0, sticky="ew")
@@ -3916,6 +4081,11 @@ class PaletteView(ttk.Frame):
 
         self._placeholder(ent, self._ph_text)
         self.search_var.trace_add("write", lambda *a: self.rebuild())
+
+    def on_yview(self, first, last):
+        """The scrollbar plus a nudge to keep the category strip in step."""
+        self.vbar.set(first, last)
+        self.on_scrolled()
 
     def _placeholder(self, entry: tk.Entry, text: str):
         entry.insert(0, text)
@@ -3941,10 +4111,62 @@ class PaletteView(ttk.Frame):
     def renderer(self) -> Renderer:
         return self.app.renderer
 
-    def show_category(self, cat: str):
+    def show_category(self, cat: str, animate: bool = True):
+        """Glide the drawer to a category instead of swapping the whole list."""
         self.category = cat
-        self.canvas.yview_moveto(0.0)
-        self.rebuild()
+        if self.query():
+            self.rebuild()
+            return
+        if cat not in self.section_y:
+            self.rebuild()
+        target = self.section_y.get(cat, 0.0) - 6.0
+        self.scroll_to(target, animate)
+
+    def scroll_area(self) -> float:
+        try:
+            region = [float(v) for v in self.canvas.cget("scrollregion").split()]
+            return max(1.0, region[3] - region[1])
+        except Exception:
+            return 1.0
+
+    def scroll_to(self, pixels: float, animate: bool = True):
+        total = self.scroll_area()
+        view = max(1.0, float(self.canvas.winfo_height()))
+        top = max(0.0, min(pixels, max(0.0, total - view)))
+        end = top / total
+        if not animate or not self.app.animations_on():
+            self.canvas.yview_moveto(end)
+            return
+        start = self.canvas.yview()[0]
+        if abs(end - start) < 0.0005:
+            return
+        distance = abs(end - start) * total
+        seconds = max(0.16, min(0.42, 0.12 + distance / 4200.0))
+        self.app.anim.play(
+            "palette-scroll", seconds,
+            lambda t: self.canvas.yview_moveto(start + (end - start) * t))
+
+    def visible_category(self) -> str:
+        """Whichever section the drawer is currently showing."""
+        if not self.section_y:
+            return self.category
+        # a header that is nearly at the top already counts as the one you
+        # are looking at, so the strip keeps up while you scroll
+        top = self.canvas.yview()[0] * self.scroll_area() + 46.0
+        best = CAT_ORDER[0]
+        for cat in CAT_ORDER:
+            if self.section_y.get(cat, 1e9) <= top:
+                best = cat
+        return best
+
+    def on_scrolled(self, *_):
+        """Keep the coloured strip in step with where the drawer is."""
+        if self.query():
+            return
+        cat = self.visible_category()
+        if cat != self.category:
+            self.category = cat
+            self.app.categories.highlight(cat)
 
     def query(self) -> str:
         q = self.search_var.get().strip()
@@ -3980,7 +4202,16 @@ class PaletteView(ttk.Frame):
                         items.append(("block", bid))
             return items
 
-        cat = self.category
+        # every category, one after another, the way Scratch does it - the
+        # category buttons scroll you to a section rather than swapping lists
+        for cat in CAT_ORDER:
+            items.append(("section", cat))
+            items.extend(self.category_items(cat))
+        return items
+
+    def category_items(self, cat: str) -> List[Tuple[str, Any]]:
+        p = self.app.project
+        items: List[Tuple[str, Any]] = []
         if cat == "variables":
             items.append(("button", ("Make a Variable", self.app.make_variable)))
             for v in p.variables:
@@ -4050,12 +4281,25 @@ class PaletteView(ttk.Frame):
                 pass
         self.widgets = []
         self.L.clear()
+        self.section_y = {}
         y = 14.0
         widest = 260.0
         z = self.renderer.scale
         for item in self.spec_ids():
             kind = item[0]
-            if kind == "header":
+            if kind == "section":
+                cat = item[1]
+                info = CATS[cat]
+                self.section_y[cat] = y
+                y += 8 * z
+                cv.create_polygon(
+                    rounded_points(12, y, 232 * z, 26 * z, 13 * z),
+                    fill=info["color"], outline=info["dark"], width=1)
+                cv.create_text(12 + 116 * z, y + 13 * z, anchor="center",
+                               text=info["name"], fill="#FFFFFF",
+                               font=(FONT_FAMILY, 10, "bold"))
+                y += 36 * z
+            elif kind == "header":
                 tint = item[2] if len(item) > 2 and item[2] else UI["text"]
                 y += 6 * z
                 cv.create_oval(14, y + 4, 24, y + 14, fill=tint, outline="")
@@ -4089,7 +4333,10 @@ class PaletteView(ttk.Frame):
                 bx, _, bw, bh = self.renderer.script_bbox(self.L, b)
                 widest = max(widest, bx + bw)
                 y += bh + 14 * z
-        cv.configure(scrollregion=(0, 0, widest + 20, max(400.0, y + 40)))
+        # room to scroll the last section up to the top
+        tail = max(0.0, float(self.canvas.winfo_height()) - 120.0)
+        cv.configure(scrollregion=(0, 0, widest + 20,
+                                   max(400.0, y + 40 + tail)))
 
     # -- mouse -------------------------------------------------------------- #
 
@@ -4276,6 +4523,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "venv_dir": ".venv",
     "autosave": True,
     "confirm_uninstall": True,
+    "animations": True,
     "zoom": 1.0,
 }
 
@@ -5548,6 +5796,7 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.settings = Settings()
+        self.anim = Animator(root)
         self.project = Project()
         self.renderer = Renderer(self.project,
                                  float(self.settings.get("zoom", 1.0)))
@@ -5802,6 +6051,9 @@ class App:
     def ui(self, fn: Callable):
         """Ask for ``fn`` to be run on the user interface thread."""
         self.ui_queue.put(fn)
+
+    def animations_on(self) -> bool:
+        return bool(self.settings.get("animations", True))
 
     # -- which Python are we using? ----------------------------------------- #
 
@@ -6498,9 +6750,23 @@ class App:
                                % problem)
             self.console.write("sys", "Look at the Python code tab to see it.")
         self.console.write("sys", "--- running %s ---" % os.path.basename(path))
-        self.flag_widget.configure(bg="#DFF5E1")
         self.status("Running...")
         self.runner.start(path, self.project.folder())
+        self.pulse_flag()
+
+    def pulse_flag(self):
+        """A gentle heartbeat on the green flag while a program is running."""
+        if not self.runner.running:
+            self.flag_widget.configure(bg=UI["toolbar"])
+            return
+        if not self.animations_on():
+            self.flag_widget.configure(bg="#DFF5E1")
+            self.root.after(400, self.pulse_flag)
+            return
+        phase = (time.time() * 1.6) % 2.0
+        amount = phase if phase < 1.0 else 2.0 - phase
+        self.flag_widget.configure(bg=blend(UI["toolbar"], "#BFEDC6", amount))
+        self.root.after(40, self.pulse_flag)
 
     def stop(self):
         if self.runner.running:
@@ -7039,6 +7305,12 @@ class SettingsDialog:
                        variable=self.confirm, bg=UI["panel"], fg=UI["text"],
                        activebackground=UI["panel"], bd=0, highlightthickness=0,
                        font=(FONT_FAMILY, 10)).pack(anchor="w", padx=10)
+        self.animations = tk.BooleanVar(
+            value=bool(app.settings.get("animations")))
+        tk.Checkbutton(box2, text="Smooth scrolling and other little animations",
+                       variable=self.animations, bg=UI["panel"], fg=UI["text"],
+                       activebackground=UI["panel"], bd=0, highlightthickness=0,
+                       font=(FONT_FAMILY, 10)).pack(anchor="w", padx=10)
 
         box3 = tk.LabelFrame(top, text=" About this copy ", bg=UI["panel"],
                              fg=UI["text"], bd=1, relief="solid",
@@ -7233,6 +7505,7 @@ class SettingsDialog:
         s.set("venv_dir", self.venv_dir.get().strip() or ".venv")
         s.set("autosave", bool(self.autosave.get()))
         s.set("confirm_uninstall", bool(self.confirm.get()))
+        s.set("animations", bool(self.animations.get()))
         self.top.destroy()
         if s.get("use_venv") and not self.app.venv_ready():
             if messagebox.askyesno(
