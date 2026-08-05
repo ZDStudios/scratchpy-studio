@@ -31,6 +31,13 @@ Python standard library**.
 python scratchpy_studio.py
 ```
 
+### 👉 [Try the browser demo](https://zdstudios.github.io/scratchpy-studio/) — no install, nothing to download
+
+[`index.html`](index.html) is a small standalone version of the same idea: one
+file, no dependencies, no build step. Drag blocks, watch the Python appear, press
+Run and it executes right there in the page. It is a taste of the real thing —
+the desktop app has 148 blocks, pip, file handling and the rest.
+
 ---
 
 ## Why it is different
@@ -330,6 +337,32 @@ Builds the entire interface head-lessly, then **compiles every one of the 148
 blocks**, checks the block definitions are well formed, round-trips a project
 through save and load, exercises the Python importer and the MCP server, and
 finally runs the generated example program and checks its output.
+
+---
+
+## The browser demo
+
+[`index.html`](index.html) is a self-contained demo you can open by
+double-clicking it, or visit at
+**[zdstudios.github.io/scratchpy-studio](https://zdstudios.github.io/scratchpy-studio/)**.
+
+It shares the desktop app's ideas in about 1,600 lines of HTML, CSS and
+JavaScript with **no dependencies and no build step**:
+
+* the same Scratch 3 shapes, drawn as SVG paths from the same puzzle geometry
+* one continuous drawer that glides between sections
+* drag, snap, C-shaped mouths, reporters that drop into slots
+* the Python it makes, updating live beside you — copy it or save it as a `.py`
+* a small interpreter so **Run** actually works in the page, and clicking a loose
+  block still shows its answer in a bubble
+
+Each block is described once, and that single description drives all three
+things: how it is drawn, the Python it generates, and how it runs. It works with
+a mouse, a pen or a finger.
+
+The demo keeps 26 blocks across five categories. Everything else — the other
+120 blocks, pip, the venv, files, the web blocks, the Python importer, the MCP
+server — lives in the desktop app.
 
 ---
 

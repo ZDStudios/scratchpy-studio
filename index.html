@@ -1,0 +1,1603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScratchPy Studio - browser demo</title>
+<meta name="description" content="Snap blocks together, get real Python. A small
+      single file demo of ScratchPy Studio that runs entirely in your browser.">
+<style>
+:root {
+  --topbar:#855CD6; --panel:#FFFFFF; --page:#F0F2F6; --line:#D9D9D9;
+  --ink:#575E75; --muted:#8A93A5; --accent:#4C97FF; --canvas:#F9F9F9;
+  --console:#1E2430; --console-ink:#DDE3EC;
+  --font:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  --mono:"Consolas",ui-monospace,"SF Mono",Menlo,monospace;
+}
+* { box-sizing:border-box; }
+html,body { height:100%; margin:0; }
+body {
+  font-family:var(--font); color:var(--ink); background:var(--page);
+  display:flex; flex-direction:column; overflow:hidden;
+}
+button { font-family:inherit; cursor:pointer; }
+
+/* ---------- top bar ---------- */
+header {
+  background:var(--topbar); color:#fff; display:flex; align-items:center;
+  gap:10px; padding:0 14px; height:46px; flex:none;
+}
+header .mark {
+  width:26px; height:26px; border-radius:50%; background:#fff;
+  display:grid; place-items:center;
+}
+header .mark span {
+  width:0; height:0; border-left:9px solid var(--topbar);
+  border-top:6px solid transparent; border-bottom:6px solid transparent;
+  margin-left:3px;
+}
+header h1 { font-size:16px; margin:0; font-weight:700; letter-spacing:.2px; }
+header .tag {
+  font-size:11px; color:#D9C9FF; border:1px solid #A98CE8; padding:1px 7px;
+  border-radius:10px;
+}
+header .spacer { flex:1; }
+header a { color:#EADFFF; text-decoration:none; font-size:13px; }
+header a:hover { text-decoration:underline; }
+
+/* ---------- toolbar ---------- */
+.toolbar {
+  background:#F9F9F9; border-bottom:1px solid var(--line); height:44px;
+  display:flex; align-items:center; gap:6px; padding:0 12px; flex:none;
+}
+.toolbar button {
+  border:0; background:transparent; color:var(--ink); font-size:13px;
+  padding:7px 10px; border-radius:6px;
+}
+.toolbar button:hover { background:#E9EDF3; }
+.icon-btn { display:flex; align-items:center; gap:6px; font-weight:600; }
+.flag { width:16px; height:16px; }
+.flag.running { animation:beat .9s ease-in-out infinite; }
+@keyframes beat { 0%,100%{ transform:scale(1);} 50%{ transform:scale(1.18);} }
+.toolbar .sep { width:1px; height:22px; background:var(--line); margin:0 6px; }
+.toolbar .note { margin-left:auto; color:var(--muted); font-size:12px; }
+
+/* ---------- layout ---------- */
+main { flex:1; display:flex; min-height:0; }
+.strip {
+  width:74px; background:var(--panel); border-right:1px solid var(--line);
+  overflow:hidden auto; flex:none; position:relative; padding-top:4px;
+}
+.strip .pick {
+  position:absolute; left:0; width:100%; height:50px; background:#F0F2F6;
+  border-left:4px solid #888; transition:top .22s cubic-bezier(.2,.8,.2,1),
+  border-color .22s;
+}
+.strip button {
+  position:relative; width:100%; height:50px; border:0; background:none;
+  display:grid; place-items:center; gap:1px; padding:0; color:var(--muted);
+  font-size:10px;
+}
+.strip button b { display:block; width:17px; height:17px; border-radius:50%;
+  transition:transform .18s cubic-bezier(.2,.8,.2,1); }
+.strip button.on { color:var(--ink); font-weight:700; }
+.strip button.on b { transform:scale(1.22); }
+
+.drawer {
+  width:262px; flex:none; background:var(--canvas);
+  border-right:1px solid var(--line); overflow:hidden auto;
+  scroll-behavior:auto;
+}
+.stage { flex:1; min-width:0; position:relative; background:var(--canvas);
+  overflow:auto; }
+.stage .watermark {
+  position:absolute; left:16px; top:8px; font-size:26px; font-weight:800;
+  color:#C7CDD8; pointer-events:none; user-select:none;
+}
+aside.side {
+  width:330px; flex:none; background:var(--panel);
+  border-left:1px solid var(--line); display:flex; flex-direction:column;
+}
+.tabs { display:flex; border-bottom:1px solid var(--line); flex:none; }
+.tabs button {
+  flex:1; border:0; background:#EEF1F6; color:var(--muted); padding:9px 0;
+  font-size:12.5px; font-weight:600;
+}
+.tabs button.on { background:var(--panel); color:var(--ink); }
+.pane { flex:1; overflow:auto; display:none; margin:0; }
+.pane.on { display:block; }
+#code { font-family:var(--mono); font-size:12.5px; line-height:1.55;
+  padding:12px 14px; white-space:pre; color:#3A4356; }
+#code .kw { color:#0033B3; } #code .st { color:#067D17; }
+#code .cm { color:#8C8C8C; } #code .nm { color:#1750EB; }
+#out { background:var(--console); color:var(--console-ink); min-height:100%;
+  font-family:var(--mono); font-size:12.5px; line-height:1.6; padding:12px 14px;
+  white-space:pre-wrap; }
+#out .err { color:#FF7B72; } #out .sys { color:#7FD1B9; }
+.side .foot { border-top:1px solid var(--line); padding:8px 12px; flex:none;
+  display:flex; gap:8px; }
+.side .foot button { border:0; border-radius:6px; background:#EEF1F6;
+  color:var(--ink); font-size:12px; padding:6px 10px; }
+.side .foot button:hover { background:#DDE3EC; }
+
+/* ---------- blocks ---------- */
+svg { display:block; }
+.blk { cursor:grab; }
+.blk.drag { cursor:grabbing; }
+.blk text { font-weight:700; fill:#fff; pointer-events:none;
+  font-family:var(--font); font-size:12.5px; }
+.slot text { font-weight:400; fill:#575E75; }
+.sect { font-weight:700; fill:#fff; font-size:12.5px; }
+.hint { fill:#fff; stroke:#B9D6FF; }
+.bubble-box { fill:#fff; stroke:#C9CDD6; }
+.bubble-text { font-family:var(--mono); font-size:12px; fill:#3A4356; }
+.pal-note { fill:var(--muted); font-size:11.5px; font-family:var(--font); }
+.pal-btn { fill:#EEF1F6; stroke:#D9D9D9; cursor:pointer; }
+.pal-btn-text { fill:#575E75; font-size:11.5px; font-weight:600;
+  font-family:var(--font); pointer-events:none; }
+#editor {
+  position:absolute; display:none; border:2px solid #999; border-radius:12px;
+  font-family:var(--font); font-size:12.5px; text-align:center; padding:0 6px;
+  outline:none; color:#575E75;
+}
+.menu {
+  position:absolute; display:none; background:#fff; border:1px solid var(--line);
+  border-radius:8px; box-shadow:0 6px 22px rgba(0,0,0,.18); padding:4px;
+  z-index:40; min-width:120px;
+}
+.menu button { display:block; width:100%; text-align:left; border:0;
+  background:none; padding:7px 12px; border-radius:5px; font-size:13px;
+  color:var(--ink); }
+.menu button:hover { background:#EEF1F6; }
+
+/* ---------- small screens ---------- */
+@media (max-width:900px) {
+  main { flex-direction:column; overflow:auto; }
+  .strip { width:100%; height:64px; display:flex; overflow:auto hidden; }
+  .strip .pick { display:none; }
+  .strip button { width:74px; flex:none; }
+  .drawer { width:100%; height:190px; }
+  .stage { height:300px; flex:none; }
+  aside.side { width:100%; height:280px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="mark"><span></span></div>
+  <h1>ScratchPy Studio</h1>
+  <span class="tag">browser demo</span>
+  <div class="spacer"></div>
+  <a href="https://github.com/ZDStudios/scratchpy-studio" target="_blank"
+     rel="noopener">Get the full app on GitHub &rarr;</a>
+</header>
+
+<div class="toolbar">
+  <button class="icon-btn" id="run" title="Run everything under the flag">
+    <svg class="flag" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3 1v14" stroke="#4CBF56" stroke-width="2" fill="none"/>
+      <path d="M4 2l9 3-9 3z" fill="#4CBF56"/>
+    </svg>Run</button>
+  <button class="icon-btn" id="stop" title="Stop">
+    <svg class="flag" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M5 3h6l3 3v6l-3 3H5l-3-3V6z" fill="#EC5959"/>
+    </svg>Stop</button>
+  <span class="sep"></span>
+  <button id="tidy">Clean up</button>
+  <button id="wipe">Clear</button>
+  <span class="sep"></span>
+  <button id="example">Load example</button>
+  <span class="note" id="status">Drag a block out of the drawer to begin.</span>
+</div>
+
+<main>
+  <nav class="strip" id="strip"><div class="pick" id="pick"></div></nav>
+  <div class="drawer" id="drawer"><svg id="palette"></svg></div>
+  <div class="stage" id="stage">
+    <div class="watermark">demo.py</div>
+    <svg id="canvas"></svg>
+    <input id="editor" spellcheck="false">
+  </div>
+  <aside class="side">
+    <div class="tabs">
+      <button class="on" data-pane="code">Python it makes</button>
+      <button data-pane="out">Output</button>
+    </div>
+    <pre class="pane on" id="code"></pre>
+    <pre class="pane" id="out"></pre>
+    <div class="foot">
+      <button id="copy">Copy the Python</button>
+      <button id="download">Save .py</button>
+    </div>
+  </aside>
+</main>
+<div class="menu" id="menu"></div>
+
+<script>
+"use strict";
+/* =====================================================================
+   ScratchPy Studio - browser demo
+   ---------------------------------------------------------------------
+   One file, no dependencies. Blocks are described once and that single
+   description drives three things: how they are drawn, the Python they
+   generate, and how they run here in the page.
+   ===================================================================== */
+
+const CATS = {
+  events:    { name:"Events",    color:"#FFBF00", dark:"#CC9900" },
+  control:   { name:"Control",   color:"#FFAB19", dark:"#CF8B17" },
+  operators: { name:"Operators", color:"#59C059", dark:"#389438" },
+  text:      { name:"Text",      color:"#9966FF", dark:"#774DCB" },
+  variables: { name:"Variables", color:"#FF8C1A", dark:"#DB6E00" }
+};
+const ORDER = ["events", "control", "operators", "text", "variables"];
+
+/* ---------------------------------------------------------------- specs */
+/*  Rows are written in a tiny mark-up so a block is one readable line:
+      %n(name,default)  number slot      %s(name,default)  text slot
+      %a(name,default)  either           %b(name)          boolean hole
+      %d(name,a|b|c)    menu             %v(name)          variable menu    */
+
+const SPECS = {};
+const PALETTE = {}; ORDER.forEach(c => PALETTE[c] = []);
+const MARK = /%([nsabdv])\(([^()]*)\)/g;
+
+function parseRow(text) {
+  const out = []; let at = 0; let m;
+  MARK.lastIndex = 0;
+  while ((m = MARK.exec(text)) !== null) {
+    const lead = text.slice(at, m.index).trim();
+    if (lead) out.push({ t:"label", text:lead });
+    const kind = m[1], body = m[2];
+    const comma = body.indexOf(",");
+    const name = comma < 0 ? body : body.slice(0, comma);
+    const rest = comma < 0 ? "" : body.slice(comma + 1);
+    if (kind === "d") {
+      out.push({ t:"menu", name, options:rest.split("|"), def:rest.split("|")[0] });
+    } else if (kind === "v") {
+      out.push({ t:"menu", name, options:"@vars", def:"score" });
+    } else {
+      out.push({ t:"in", name, kind, def:rest });
+    }
+    at = m.index + m[0].length;
+  }
+  const tail = text.slice(at).trim();
+  if (tail) out.push({ t:"label", text:tail });
+  return out;
+}
+
+function B(id, cat, shape, rows, code, run, listed = true) {
+  if (typeof rows === "string") rows = [rows];
+  const spec = {
+    id, cat, shape, rows: rows.map(parseRow), code, run,
+    mouths: shape === "c" ? rows.length : 0,
+    value: shape === "reporter" || shape === "boolean",
+    hat: shape === "hat",
+    hasNext: shape === "hat" || shape === "stack" || shape === "c",
+    hasPrev: shape === "stack" || shape === "c"
+  };
+  SPECS[id] = spec;
+  if (listed) PALETTE[cat].push(id);
+  return spec;
+}
+
+/* -- events ----------------------------------------------------------- */
+B("event_start", "events", "hat", "when green flag clicked", "", null);
+
+/* -- control ---------------------------------------------------------- */
+B("control_repeat", "control", "c", "repeat %n(times,10)",
+  "for _ in range(int({times})):\n    {BODY0}",
+  function* (ctx, b) {
+    const n = Math.min(10000, Math.max(0, Math.floor(num(ctx, b, "times"))));
+    for (let i = 0; i < n; i++) yield* runStack(b.branches[0], ctx);
+  });
+
+B("control_forever", "control", "c", "forever",
+  "while True:\n    {BODY0}",
+  function* (ctx, b) {
+    while (true) { yield* runStack(b.branches[0], ctx); yield { tick:true }; }
+  });
+
+B("control_if", "control", "c", "if %b(cond) then",
+  "if {cond}:\n    {BODY0}",
+  function* (ctx, b) {
+    if (truth(ctx, b, "cond")) yield* runStack(b.branches[0], ctx);
+  });
+
+B("control_if_else", "control", "c", ["if %b(cond) then", "else"],
+  "if {cond}:\n    {BODY0}\nelse:\n    {BODY1}",
+  function* (ctx, b) {
+    yield* runStack(b.branches[truth(ctx, b, "cond") ? 0 : 1], ctx);
+  });
+
+B("control_wait", "control", "stack", "wait %n(secs,1) seconds",
+  "time.sleep({secs})",
+  function* (ctx, b) {
+    const until = performance.now() + Math.max(0, num(ctx, b, "secs")) * 1000;
+    yield { until };
+  });
+
+/* -- operators -------------------------------------------------------- */
+B("op_add", "operators", "reporter", "%n(a,) + %n(b,)", "({a} + {b})",
+  (c, b) => num(c, b, "a") + num(c, b, "b"));
+B("op_sub", "operators", "reporter", "%n(a,) - %n(b,)", "({a} - {b})",
+  (c, b) => num(c, b, "a") - num(c, b, "b"));
+B("op_mul", "operators", "reporter", "%n(a,) * %n(b,)", "({a} * {b})",
+  (c, b) => num(c, b, "a") * num(c, b, "b"));
+B("op_div", "operators", "reporter", "%n(a,) / %n(b,)", "({a} / {b})",
+  (c, b) => { const d = num(c, b, "b");
+              if (!d) throw new Error("ZeroDivisionError: division by zero");
+              return num(c, b, "a") / d; });
+
+B("op_compare", "operators", "boolean", "%a(a,) %d(op,<|>|==|!=) %a(b,)",
+  "({a} {op} {b})",
+  (c, b) => {
+    const x = any(c, b, "a"), y = any(c, b, "b");
+    switch (b.fields.op) {
+      case "<": return cmp(x, y) < 0;
+      case ">": return cmp(x, y) > 0;
+      case "==": return String(x) === String(y);
+      default: return String(x) !== String(y);
+    }
+  });
+
+B("op_and", "operators", "boolean", "%b(a) and %b(b)", "({a} and {b})",
+  (c, b) => truth(c, b, "a") && truth(c, b, "b"));
+B("op_or", "operators", "boolean", "%b(a) or %b(b)", "({a} or {b})",
+  (c, b) => truth(c, b, "a") || truth(c, b, "b"));
+B("op_not", "operators", "boolean", "not %b(a)", "(not {a})",
+  (c, b) => !truth(c, b, "a"));
+
+B("op_random", "operators", "reporter", "pick random %n(a,1) to %n(b,10)",
+  "random.randint(int({a}), int({b}))",
+  (c, b) => {
+    const lo = Math.ceil(num(c, b, "a")), hi = Math.floor(num(c, b, "b"));
+    return lo + Math.floor(Math.random() * (hi - lo + 1));
+  });
+
+B("op_round", "operators", "reporter", "round %n(a,3.7)", "round({a})",
+  (c, b) => Math.round(num(c, b, "a")));
+
+/* -- text ------------------------------------------------------------- */
+B("text_print", "text", "stack", "print %a(msg,Hello world!)", "print({msg})",
+  function* (ctx, b) { ctx.say(show(any(ctx, b, "msg"))); });
+
+B("text_join", "text", "reporter", "join %a(a,apple ) %a(b,banana)",
+  "(str({a}) + str({b}))",
+  (c, b) => show(any(c, b, "a")) + show(any(c, b, "b")));
+
+B("text_length", "text", "reporter", "length of %a(s,world)", "len(str({s}))",
+  (c, b) => show(any(c, b, "s")).length);
+
+B("text_upper", "text", "reporter", "%a(s,hello) in upper case",
+  "str({s}).upper()", (c, b) => show(any(c, b, "s")).toUpperCase());
+
+B("text_letter", "text", "reporter", "letter %n(i,1) of %a(s,world)",
+  "str({s})[int({i}) - 1]",
+  (c, b) => show(any(c, b, "s")).charAt(Math.floor(num(c, b, "i")) - 1));
+
+/* -- variables -------------------------------------------------------- */
+B("var_set", "variables", "stack", "set %v(var) to %a(val,0)", "{var} = {val}",
+  function* (ctx, b) { ctx.vars[b.fields.var] = any(ctx, b, "val"); });
+
+B("var_change", "variables", "stack", "change %v(var) by %n(val,1)",
+  "{var} = {var} + {val}",
+  function* (ctx, b) {
+    const now = Number(ctx.vars[b.fields.var]);
+    ctx.vars[b.fields.var] = (isNaN(now) ? 0 : now) + num(ctx, b, "val");
+  });
+
+B("var_show", "variables", "stack", "print %v(var)", 'print({var})',
+  function* (ctx, b) { ctx.say(show(ctx.vars[b.fields.var])); });
+
+/* a rounded reporter for each variable, made as they are created */
+function varSpec(name) {
+  const id = "var::" + name;
+  if (!SPECS[id]) {
+    const spec = B(id, "variables", "reporter", [name], pyName(name),
+                   (c) => c.vars[name], false);
+    spec.varName = name;
+  }
+  return SPECS[id];
+}
+
+/* ------------------------------------------------------- small helpers */
+function pyName(name) {
+  let s = String(name).replace(/[^0-9A-Za-z_]/g, "_");
+  if (!s || /^[0-9]/.test(s)) s = "v_" + s;
+  return s;
+}
+function isNumberish(v) {
+  return v !== "" && v !== null && !isNaN(Number(v));
+}
+function cmp(a, b) {
+  if (isNumberish(a) && isNumberish(b)) return Number(a) - Number(b);
+  return String(a) < String(b) ? -1 : (String(a) > String(b) ? 1 : 0);
+}
+function show(v) {
+  if (v === true) return "True";
+  if (v === false) return "False";
+  if (v === null || v === undefined) return "";
+  if (typeof v === "number") {
+    return Number.isInteger(v) ? String(v) : String(Math.round(v * 1e10) / 1e10);
+  }
+  return String(v);
+}
+
+/* ------------------------------------------------------- block objects */
+let seq = 0;
+function makeBlock(spec) {
+  const b = {
+    id: "b" + (++seq), spec, values:{}, fields:{}, next:null, prev:null,
+    parent:null, slot:null, branches:new Array(spec.mouths).fill(null),
+    x:0, y:0
+  };
+  spec.rows.forEach(row => row.forEach(tok => {
+    if (tok.t === "in") b.values[tok.name] = tok.def;
+    if (tok.t === "menu") b.fields[tok.name] = tok.def;
+  }));
+  return b;
+}
+function chain(b) { const out = []; while (b) { out.push(b); b = b.next; } return out; }
+function lastOf(b) { while (b.next) b = b.next; return b; }
+function topOf(b) {
+  while (true) {
+    if (b.prev) b = b.prev;
+    else if (b.parent) b = b.parent;
+    else return b;
+  }
+}
+function subtree(b, out) {
+  out = out || [];
+  out.push(b);
+  Object.values(b.values).forEach(v => { if (v && v.spec) subtree(v, out); });
+  b.branches.forEach(k => { if (k) subtree(k, out); });
+  if (b.next) subtree(b.next, out);
+  return out;
+}
+function detach(b) {
+  if (b.prev) { b.prev.next = null; b.prev = null; }
+  else if (b.parent) {
+    const p = b.parent;
+    if (typeof b.slot === "number") p.branches[b.slot] = null;
+    else {
+      let def = "";
+      p.spec.rows.forEach(r => r.forEach(t => {
+        if (t.t === "in" && t.name === b.slot) def = t.def;
+      }));
+      p.values[b.slot] = def;
+    }
+    b.parent = null; b.slot = null;
+  }
+}
+function attachNext(a, b) {
+  const tail = lastOf(b), after = a.next;
+  a.next = b; b.prev = a; b.parent = null; b.slot = null;
+  if (after) { tail.next = after; after.prev = tail; }
+}
+function attachBranch(a, i, b) {
+  const had = a.branches[i];
+  a.branches[i] = b; b.prev = null; b.parent = a; b.slot = i;
+  if (had) attachNext(lastOf(b), had);
+}
+function attachSlot(a, name, b) {
+  const old = a.values[name];
+  a.values[name] = b; b.prev = null; b.parent = a; b.slot = name;
+  return (old && old.spec) ? old : null;
+}
+
+/* ---------------------------------------------------------- the project */
+const project = {
+  scripts: [],
+  vars: ["score", "name"],
+  starts: { score:"0", name:'""' }
+};
+project.vars.forEach(varSpec);
+
+/* ===================================================================== */
+/*  Geometry - the puzzle outlines that make a block look like Scratch    */
+/* ===================================================================== */
+
+const M = {
+  r:4, notchX:13, notchW:18, notchD:5, notchS:3,
+  padX:10, padY:7, gap:6, minH:34, minW:64,
+  slotH:22, slotPad:9, slotMinW:30, boolMinW:42,
+  hatH:15, hatW:64, indent:16, footer:14, mouthMin:24, arrow:12
+};
+
+const SVGNS = "http://www.w3.org/2000/svg";
+const measure = document.createElement("canvas").getContext("2d");
+function textWidth(text, bold, size) {
+  measure.font = (bold ? "700 " : "400 ") + (size || 12.5) +
+                 'px "Segoe UI",system-ui,sans-serif';
+  return measure.measureText(String(text)).width;
+}
+
+/* an arc as a list of points, so every shape is one <path> */
+function arc(cx, cy, r, a0, a1, steps) {
+  const pts = [];
+  steps = steps || 5;
+  for (let i = 0; i <= steps; i++) {
+    const a = a0 + (a1 - a0) * (i / steps);
+    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  return pts;
+}
+function toPath(pts) {
+  return "M" + pts.map(p => p[0].toFixed(2) + " " + p[1].toFixed(2)).join("L") + "Z";
+}
+function notch(x, y, forward) {
+  const p = [[x + M.notchX, y], [x + M.notchX + M.notchS, y + M.notchD],
+             [x + M.notchX + M.notchW - M.notchS, y + M.notchD],
+             [x + M.notchX + M.notchW, y]];
+  return forward ? p : p.reverse();
+}
+
+/* segments: ["bar",h] and ["mouth",h], always starting and ending with a bar */
+function blockPath(x, y, w, segments, opt) {
+  opt = opt || {};
+  const H = segments.reduce((t, s) => t + s[1], 0);
+  let pts = [];
+  if (opt.hat) {
+    pts.push([x, y + M.hatH]);
+    for (let i = 1; i <= 12; i++) {
+      const t = i / 12;
+      pts.push([x + M.hatW * t, y + M.hatH * (1 - Math.sin(t * Math.PI / 2))]);
+    }
+  } else {
+    pts.push([x + M.r, y]);
+    if (opt.topNotch !== false) pts = pts.concat(notch(x, y, true));
+  }
+  pts = pts.concat(arc(x + w - M.r, y + M.r, M.r, -Math.PI / 2, 0));
+  let cur = y;
+  segments.forEach(seg => {
+    if (seg[0] === "bar") { cur += seg[1]; return; }
+    pts.push([x + w, cur]);
+    pts.push([x + M.indent + M.notchX + M.notchW, cur]);
+    pts = pts.concat(notch(x + M.indent, cur, false));
+    pts.push([x + M.indent, cur]);
+    pts.push([x + M.indent, cur + seg[1]]);
+    pts.push([x + w, cur + seg[1]]);
+    cur += seg[1];
+  });
+  pts = pts.concat(arc(x + w - M.r, y + H - M.r, M.r, 0, Math.PI / 2));
+  if (opt.bottomBump !== false) pts = pts.concat(notch(x, y + H, false));
+  pts = pts.concat(arc(x + M.r, y + H - M.r, M.r, Math.PI / 2, Math.PI));
+  if (opt.hat) pts.push([x, y + M.hatH]);
+  else pts = pts.concat(arc(x + M.r, y + M.r, M.r, Math.PI, Math.PI * 1.5));
+  return toPath(pts);
+}
+function pillPath(x, y, w, h) {
+  const r = Math.min(h / 2, w / 2);
+  let pts = arc(x + w - r, y + r, r, -Math.PI / 2, 0, 6);
+  pts = pts.concat(arc(x + w - r, y + h - r, r, 0, Math.PI / 2, 6));
+  pts = pts.concat(arc(x + r, y + h - r, r, Math.PI / 2, Math.PI, 6));
+  pts = pts.concat(arc(x + r, y + r, r, Math.PI, Math.PI * 1.5, 6));
+  return toPath(pts);
+}
+function hexPath(x, y, w, h) {
+  const c = h / 2;
+  return toPath([[x + c, y], [x + w - c, y], [x + w, y + c],
+                 [x + w - c, y + h], [x + c, y + h], [x, y + c]]);
+}
+
+/* ===================================================================== */
+/*  Layout - work out every size once, then place everything             */
+/* ===================================================================== */
+
+const L = { size:{}, rect:{}, parts:{}, slot:{}, mouth:{} };
+
+function clearLayout() {
+  L.size = {}; L.rect = {}; L.parts = {}; L.slot = {}; L.mouth = {};
+}
+
+function slotText(b, tok) {
+  const v = b.values[tok.name];
+  return (v && v.spec) ? null : String(v === undefined ? "" : v);
+}
+
+function measureBlock(b) {
+  const spec = b.spec;
+  const pad = spec.value ? M.padX * 0.8 : M.padX;
+  const rows = [];
+  let widest = spec.value ? M.slotMinW : M.minW;
+  spec.rows.forEach((row, ri) => {
+    const parts = []; let cw = 0, ch = 14;
+    row.forEach(tok => {
+      let w, h;
+      if (tok.t === "label") { w = textWidth(tok.text, true); h = 14; }
+      else if (tok.t === "menu") {
+        w = textWidth(menuLabel(b, tok), false) + M.slotPad * 2 + M.arrow;
+        h = M.slotH;
+      } else {
+        const child = b.values[tok.name];
+        if (child && child.spec) { const s = measureBlock(child); w = s.w; h = s.h; }
+        else {
+          const tw = textWidth(slotText(b, tok), false);
+          w = tok.kind === "b" ? Math.max(M.boolMinW, tw + M.slotPad * 2 + M.slotH)
+                               : Math.max(M.slotMinW, tw + M.slotPad * 2);
+          h = M.slotH;
+        }
+      }
+      parts.push({ tok, w, h });
+      cw += w; ch = Math.max(ch, h);
+    });
+    if (parts.length) cw += M.gap * (parts.length - 1);
+    let rw = pad * 2 + cw, rh;
+    if (spec.value) {
+      rh = Math.max(M.slotH, ch + 5);
+      if (spec.shape === "boolean") rw += rh * 0.6;
+    } else {
+      rh = Math.max(M.minH, ch + M.padY * 2);
+    }
+    if (ri === 0 && spec.hat) rh += M.hatH;
+    rows.push({ parts, w:rw, h:rh });
+    widest = Math.max(widest, rw);
+  });
+  const mouths = [];
+  let h;
+  if (spec.shape === "c") {
+    for (let i = 0; i < spec.mouths; i++) {
+      mouths.push(Math.max(M.mouthMin, stackHeight(b.branches[i])));
+    }
+    h = rows.reduce((t, r) => t + r.h, 0) +
+        mouths.reduce((t, v) => t + v, 0) + M.footer;
+  } else {
+    h = rows.length ? rows[0].h : M.minH;
+  }
+  const size = { w:widest, h, rows, mouths };
+  L.size[b.id] = size;
+  return size;
+}
+function stackHeight(b) {
+  let total = 0;
+  while (b) { total += measureBlock(b).h; b = b.next; }
+  return total;
+}
+
+function placeBlock(b, x, y) {
+  const spec = b.spec;
+  const s = L.size[b.id] || measureBlock(b);
+  L.rect[b.id] = { x, y, w:s.w, h:s.h };
+  const pad = spec.value ? M.padX * 0.8 : M.padX;
+  const parts = [];
+  let cy = y;
+  s.rows.forEach((row, ri) => {
+    const extra = (ri === 0 && spec.hat) ? M.hatH : 0;
+    const top = cy + extra, avail = row.h - extra;
+    let cx = x + pad + (spec.shape === "boolean" ? row.h * 0.3 : 0);
+    row.parts.forEach(part => {
+      const ty = top + (avail - part.h) / 2;
+      if (part.tok.t === "in") {
+        const child = b.values[part.tok.name];
+        if (child && child.spec) placeBlock(child, cx, ty);
+        else L.slot[b.id + "/" + part.tok.name] =
+               { x:cx, y:ty, w:part.w, h:part.h };
+      }
+      parts.push({ tok:part.tok, x:cx, y:ty, w:part.w, h:part.h });
+      cx += part.w + M.gap;
+    });
+    cy += row.h;
+    if (spec.shape === "c" && ri < s.mouths.length) {
+      const mh = s.mouths[ri];
+      L.mouth[b.id + "/" + ri] = { x:x + M.indent, y:cy, w:s.w - M.indent, h:mh };
+      if (b.branches[ri]) placeStack(b.branches[ri], x + M.indent, cy);
+      cy += mh;
+    }
+  });
+  L.parts[b.id] = parts;
+}
+function placeStack(b, x, y) {
+  while (b) { placeBlock(b, x, y); y += L.size[b.id].h; b = b.next; }
+}
+function layoutScript(root) {
+  stackHeight(root);
+  placeStack(root, root.x, root.y);
+}
+function scriptBox(root) {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  subtree(root).forEach(b => {
+    const r = L.rect[b.id];
+    if (!r) return;
+    x0 = Math.min(x0, r.x); y0 = Math.min(y0, r.y);
+    x1 = Math.max(x1, r.x + r.w); y1 = Math.max(y1, r.y + r.h);
+  });
+  if (x0 > x1) return { x:root.x, y:root.y, w:0, h:0 };
+  return { x:x0, y:y0, w:x1 - x0, h:y1 - y0 };
+}
+
+/* ===================================================================== */
+/*  Drawing                                                              */
+/* ===================================================================== */
+
+function el(name, attrs, parent) {
+  const node = document.createElementNS(SVGNS, name);
+  for (const k in attrs) node.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(node);
+  return node;
+}
+function menuLabel(b, tok) {
+  if (tok.options === "@vars") {
+    if (!project.vars.includes(b.fields[tok.name])) {
+      b.fields[tok.name] = project.vars[0] || "score";
+    }
+    return b.fields[tok.name];
+  }
+  return b.fields[tok.name];
+}
+
+function drawBlock(host, b, rootId) {
+  const spec = b.spec, s = L.size[b.id], r = L.rect[b.id];
+  const cat = CATS[spec.cat];
+  const g = el("g", { class:"blk", "data-block":b.id, "data-root":rootId }, host);
+  let d;
+  if (spec.shape === "reporter") d = pillPath(r.x, r.y, r.w, r.h);
+  else if (spec.shape === "boolean") d = hexPath(r.x, r.y, r.w, r.h);
+  else {
+    const segs = [];
+    if (spec.shape === "c") {
+      s.rows.forEach((row, i) => { segs.push(["bar", row.h]);
+                                   segs.push(["mouth", s.mouths[i]]); });
+      segs.push(["bar", M.footer]);
+    } else segs.push(["bar", r.h]);
+    d = blockPath(r.x, r.y, r.w, segs,
+                  { hat:spec.hat, topNotch:spec.hasPrev, bottomBump:spec.hasNext });
+  }
+  el("path", { d, fill:cat.color, stroke:cat.dark, "stroke-width":1 }, g);
+
+  (L.parts[b.id] || []).forEach(part => {
+    const mid = part.y + part.h / 2;
+    if (part.tok.t === "label") {
+      el("text", { x:part.x, y:mid + 4.5 }, g).textContent = part.tok.text;
+    } else if (part.tok.t === "menu") {
+      const sub = el("g", { class:"slot", "data-menu":b.id + "/" + part.tok.name,
+                            style:"cursor:pointer" }, g);
+      el("path", { d:pillPath(part.x, part.y, part.w, part.h), fill:cat.dark,
+                   stroke:cat.dark }, sub);
+      const t = el("text", { x:part.x + M.slotPad, y:mid + 4,
+                             style:"fill:#fff;font-weight:600" }, sub);
+      t.textContent = menuLabel(b, part.tok);
+      el("path", { d:toPath([[part.x + part.w - 16, mid - 2],
+                             [part.x + part.w - 8, mid - 2],
+                             [part.x + part.w - 12, mid + 3]]), fill:"#fff" }, sub);
+    } else {
+      const child = b.values[part.tok.name];
+      if (child && child.spec) { drawBlock(g, child, rootId); return; }
+      const sub = el("g", { class:"slot", "data-slot":b.id + "/" + part.tok.name },
+                     g);
+      if (part.tok.kind === "b") {
+        el("path", { d:hexPath(part.x, part.y, part.w, part.h), fill:cat.dark,
+                     stroke:cat.dark }, sub);
+      } else {
+        el("path", { d:pillPath(part.x, part.y, part.w, part.h), fill:"#fff",
+                     stroke:cat.dark }, sub);
+        const t = el("text", { x:part.x + part.w / 2, y:mid + 4,
+                               "text-anchor":"middle" }, sub);
+        t.textContent = slotText(b, part.tok);
+      }
+    }
+  });
+  b.branches.forEach(k => { if (k) drawStack(g, k, rootId); });
+}
+function drawStack(host, b, rootId) {
+  while (b) { drawBlock(host, b, rootId); b = b.next; }
+}
+
+/* ===================================================================== */
+/*  Python, written from the very same block descriptions                */
+/* ===================================================================== */
+
+function pyStr(s) { return JSON.stringify(String(s === undefined ? "" : s)); }
+function pyNum(t) {
+  t = String(t === undefined ? "" : t).trim();
+  if (t === "") return "0";
+  if (isNumberish(t)) return t;
+  return pyStr(t);
+}
+function pyAny(t) {
+  t = String(t === undefined ? "" : t);
+  if (t.trim() === "") return '""';
+  if (isNumberish(t.trim())) return t.trim();
+  return pyStr(t);
+}
+function slotPython(b, tok) {
+  const v = b.values[tok.name];
+  if (v && v.spec) return expressionPython(v);
+  if (tok.kind === "n") return pyNum(v);
+  if (tok.kind === "s") return pyStr(v);
+  if (tok.kind === "b") return "False";
+  return pyAny(v);
+}
+function valuesPython(b) {
+  const out = {};
+  b.spec.rows.forEach(row => row.forEach(tok => {
+    if (tok.t === "in") out[tok.name] = slotPython(b, tok);
+    else if (tok.t === "menu") {
+      out[tok.name] = tok.options === "@vars" ? pyName(b.fields[tok.name])
+                                              : b.fields[tok.name];
+    }
+  }));
+  return out;
+}
+function fill(template, values) {
+  return template.replace(/\{([A-Za-z_][A-Za-z_0-9]*)\}/g,
+    (whole, name) => (name in values) ? values[name] : whole);
+}
+function expressionPython(b) {
+  if (b.spec.varName) return pyName(b.spec.varName);
+  return fill(b.spec.code || "None", valuesPython(b));
+}
+function statementPython(b) {
+  const values = valuesPython(b);
+  const bodies = b.branches.map(k => stackPython(k));
+  const out = [];
+  (b.spec.code || "").split("\n").forEach(line => {
+    const m = line.match(/^(\s*)\{BODY(\d+)\}\s*$/);
+    if (m) {
+      let body = bodies[Number(m[2])] || [];
+      if (!body.length) body = ["pass"];
+      body.forEach(l => out.push(m[1] + l));
+    } else if (line.trim()) {
+      out.push(fill(line, values));
+    }
+  });
+  return out;
+}
+function stackPython(b) {
+  let out = [];
+  while (b) { out = out.concat(statementPython(b)); b = b.next; }
+  return out;
+}
+function usesBlock(id) {
+  return project.scripts.some(s => subtree(s).some(b => b.spec.id === id));
+}
+function buildPython() {
+  const lines = ['"""', "demo - generated by ScratchPy Studio.", "",
+                 "Built out of the blocks next door. Copy it into a file and",
+                 "it runs like any other Python program.", '"""', ""];
+  const needs = [];
+  if (usesBlock("control_wait")) needs.push("time");
+  if (usesBlock("op_random")) needs.push("random");
+  needs.sort().forEach(n => lines.push("import " + n));
+  if (needs.length) lines.push("");
+  if (project.vars.length) {
+    lines.push("# ---- variables ----");
+    project.vars.forEach(v =>
+      lines.push(pyName(v) + " = " + (project.starts[v] || "0")));
+    lines.push("");
+  }
+  const body = [];
+  let loose = 0;
+  project.scripts.forEach(s => {
+    if (s.spec.id === "event_start") stackPython(s.next).forEach(l => body.push(l));
+    else loose++;
+  });
+  const touched = [];
+  project.scripts.forEach(s => subtree(s).forEach(b => {
+    if (b.spec.id === "var_set" || b.spec.id === "var_change") {
+      const n = pyName(b.fields.var);
+      if (!touched.includes(n)) touched.push(n);
+    }
+  }));
+  lines.push("def main():");
+  lines.push('    """Everything under the green flag."""');
+  if (touched.length) lines.push("    global " + touched.join(", "));
+  (body.length ? body : ["pass"]).forEach(l => lines.push("    " + l));
+  lines.push("", "", 'if __name__ == "__main__":', "    main()");
+  if (loose) {
+    lines.push("", "# " + loose + " loose block" + (loose === 1 ? " is" : "s are") +
+               " not joined to a hat, so " + (loose === 1 ? "it was" : "they were") +
+               " left out.", "# Click one on the canvas to try it on its own.");
+  }
+  return lines.join("\n");
+}
+
+/* a light dusting of colour for the code panel */
+function paintPython(src) {
+  const words = /\b(def|if|else|elif|for|while|in|return|import|global|not|and|or|True|False|None|pass|range|print|int|str|len|round|random|time)\b/g;
+  return src
+    .replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c]))
+    .replace(/(&quot;|")([^"\n]*)("|&quot;)/g, '<span class="st">$1$2$3</span>')
+    .replace(/#[^\n]*/g, m => '<span class="cm">' + m + "</span>")
+    .replace(words, m => '<span class="kw">' + m + "</span>")
+    .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="nm">$1</span>');
+}
+
+/* ===================================================================== */
+/*  Running the blocks here in the page                                  */
+/* ===================================================================== */
+
+function num(ctx, b, name) {
+  const v = valueOf(ctx, b, name);
+  const n = Number(v);
+  return isNaN(n) ? 0 : n;
+}
+function any(ctx, b, name) { return valueOf(ctx, b, name); }
+function truth(ctx, b, name) {
+  const v = valueOf(ctx, b, name);
+  return !(v === false || v === "" || v === 0 || v === undefined || v === null ||
+           v === "False");
+}
+function valueOf(ctx, b, name) {
+  const v = b.values[name];
+  if (v && v.spec) return evaluate(ctx, v);
+  return v;
+}
+function evaluate(ctx, b) {
+  if (b.spec.varName) return ctx.vars[b.spec.varName];
+  if (!b.spec.run) return "";
+  return b.spec.run(ctx, b);
+}
+function* runStack(b, ctx) {
+  while (b) {
+    ctx.steps++;
+    if (ctx.steps % 400 === 0) yield { tick:true };
+    if (b.spec.run) yield* b.spec.run(ctx, b);
+    b = b.next;
+  }
+}
+
+let runner = null;
+function startRunning(scripts, onDone) {
+  stopRunning();
+  const ctx = {
+    vars:{}, steps:0,
+    say(line) { printOut(line); }
+  };
+  project.vars.forEach(v => {
+    const start = String(project.starts[v] || "0").trim();
+    ctx.vars[v] = start === '""' || start === "''" ? "" :
+                  (isNumberish(start) ? Number(start) : start.replace(/^["']|["']$/g, ""));
+  });
+  const jobs = scripts.map(s => runStack(s, ctx));
+  let at = 0;
+  const state = { stopped:false, timer:null, frame:null };
+  runner = state;
+
+  function pump() {
+    if (state.stopped) return;
+    const until = performance.now() + 12;
+    while (performance.now() < until) {
+      if (at >= jobs.length) { finish(); return; }
+      let step;
+      try { step = jobs[at].next(); }
+      catch (err) {
+        printOut(String(err && err.message ? err.message : err), "err");
+        at++; continue;
+      }
+      if (step.done) { at++; continue; }
+      if (step.value && step.value.until) {
+        const wait = Math.max(0, step.value.until - performance.now());
+        state.timer = setTimeout(pump, wait);
+        return;
+      }
+    }
+    /* a timer, not a frame, so a forever loop keeps ticking even when the
+       tab is in the background */
+    state.timer = setTimeout(pump, 8);
+  }
+  function finish() {
+    runner = null;
+    document.querySelector("#run .flag").classList.remove("running");
+    if (onDone) onDone();
+  }
+  document.querySelector("#run .flag").classList.add("running");
+  pump();
+  return state;
+}
+function stopRunning() {
+  if (!runner) return;
+  runner.stopped = true;
+  if (runner.timer) clearTimeout(runner.timer);
+  runner = null;
+  document.querySelector("#run .flag").classList.remove("running");
+}
+
+/* ===================================================================== */
+/*  The page: drawer, canvas, dragging, snapping                         */
+/* ===================================================================== */
+
+const canvas = document.getElementById("canvas");
+const palette = document.getElementById("palette");
+const drawer = document.getElementById("drawer");
+const stage = document.getElementById("stage");
+const strip = document.getElementById("strip");
+const pick = document.getElementById("pick");
+const editor = document.getElementById("editor");
+const menu = document.getElementById("menu");
+const statusLine = document.getElementById("status");
+
+const protos = {};       /* palette blocks, kept so they can be measured */
+const sectionY = {};
+let current = "events";
+let drag = null;
+
+function say(text) { statusLine.textContent = text; }
+function printOut(line, cls) {
+  const out = document.getElementById("out");
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = line + "\n";
+  out.appendChild(span);
+  out.scrollTop = out.scrollHeight;
+}
+
+/* ---------------------------------------------------------- the drawer */
+function paletteItems() {
+  const items = [];
+  ORDER.forEach(cat => {
+    items.push({ kind:"section", cat });
+    if (cat === "variables") {
+      items.push({ kind:"button", label:"Make a variable", action:makeVariable });
+      project.vars.forEach(v => items.push({ kind:"block", id:"var::" + v }));
+    }
+    if (cat === "events") {
+      items.push({ kind:"note",
+                   text:"Snap blocks under this, then press Run." });
+    }
+    PALETTE[cat].forEach(id => items.push({ kind:"block", id }));
+  });
+  return items;
+}
+
+function buildPalette() {
+  palette.textContent = "";
+  clearLayout();
+  let y = 12, widest = 240;
+  paletteItems().forEach(item => {
+    if (item.kind === "section") {
+      const cat = CATS[item.cat];
+      sectionY[item.cat] = y;
+      y += 6;
+      el("path", { d:pillPath(12, y, 218, 25), fill:cat.color,
+                   stroke:cat.dark }, palette);
+      const t = el("text", { x:121, y:y + 17, "text-anchor":"middle",
+                             class:"sect" }, palette);
+      t.textContent = cat.name;
+      y += 36;
+    } else if (item.kind === "note") {
+      const t = el("text", { x:14, y:y + 11, class:"pal-note" }, palette);
+      t.textContent = item.text;
+      y += 24;
+    } else if (item.kind === "button") {
+      const g = el("g", { style:"cursor:pointer" }, palette);
+      g.addEventListener("click", item.action);
+      el("path", { d:pillPath(14, y, 132, 26), class:"pal-btn" }, g);
+      const t = el("text", { x:80, y:y + 17, "text-anchor":"middle",
+                             class:"pal-btn-text" }, g);
+      t.textContent = item.label;
+      y += 36;
+    } else {
+      const spec = SPECS[item.id];
+      if (!spec) return;
+      let b = protos[item.id];
+      if (!b || b.spec !== spec) { b = makeBlock(spec); protos[item.id] = b; }
+      b.x = 14; b.y = y;
+      layoutScript(b);
+      drawStack(palette, b, b.id);
+      const box = scriptBox(b);
+      widest = Math.max(widest, box.x + box.w);
+      y += box.h + 12;
+    }
+  });
+  palette.setAttribute("width", widest + 16);
+  palette.setAttribute("height", y + drawer.clientHeight * 0.7);
+  drawScripts();
+}
+
+function buildStrip() {
+  ORDER.forEach((cat, i) => {
+    const b = document.createElement("button");
+    b.dataset.cat = cat;
+    b.innerHTML = '<b style="background:' + CATS[cat].color + '"></b>' +
+                  CATS[cat].name;
+    b.addEventListener("click", () => glideTo(cat));
+    strip.appendChild(b);
+  });
+  markStrip("events");
+}
+function markStrip(cat) {
+  current = cat;
+  const i = ORDER.indexOf(cat);
+  pick.style.top = (4 + i * 50) + "px";
+  pick.style.borderLeftColor = CATS[cat].dark;
+  strip.querySelectorAll("button").forEach(b =>
+    b.classList.toggle("on", b.dataset.cat === cat));
+}
+function glideTo(cat) {
+  markStrip(cat);
+  const target = Math.max(0, (sectionY[cat] || 0) - 8);
+  const from = drawer.scrollTop;
+  const distance = target - from;
+  if (Math.abs(distance) < 2) return;
+  const time = Math.min(420, Math.max(160, 120 + Math.abs(distance) / 3));
+  const began = performance.now();
+  clearTimeout(glideTo.timer);
+  /* a timer rather than requestAnimationFrame, so the drawer still lands in
+     the right place in a background tab where frames are not being drawn */
+  (function slide() {
+    const t = Math.min(1, (performance.now() - began) / time);
+    drawer.scrollTop = from + distance * (1 - Math.pow(1 - t, 3));
+    if (t < 1) glideTo.timer = setTimeout(slide, 16);
+  })();
+}
+drawer.addEventListener("scroll", () => {
+  let seen = ORDER[0];
+  ORDER.forEach(cat => { if ((sectionY[cat] || 0) <= drawer.scrollTop + 46) seen = cat; });
+  if (seen !== current) markStrip(seen);
+});
+
+/* ------------------------------------------------------- the workspace */
+function drawScripts() {
+  canvas.textContent = "";
+  clearLayout();
+  project.scripts.forEach(s => layoutScript(s));
+  /* whatever is being dragged goes on top */
+  const order = project.scripts.slice();
+  if (drag) {
+    const i = order.indexOf(drag.block);
+    if (i >= 0) { order.splice(i, 1); order.push(drag.block); }
+  }
+  order.forEach(s => drawStack(canvas, s, s.id));
+  let w = 800, h = 500;
+  project.scripts.forEach(s => {
+    const box = scriptBox(s);
+    w = Math.max(w, box.x + box.w + 60);
+    h = Math.max(h, box.y + box.h + 80);
+  });
+  canvas.setAttribute("width", w);
+  canvas.setAttribute("height", h);
+  if (!drag) refreshCode();      /* not on every mouse move */
+}
+function refreshCode() {
+  document.getElementById("code").innerHTML = paintPython(buildPython());
+}
+
+function findBlock(id) {
+  for (const s of project.scripts) {
+    const hit = subtree(s).find(b => b.id === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+function pointIn(svg, ev) {
+  const box = svg.getBoundingClientRect();
+  return { x:ev.clientX - box.left, y:ev.clientY - box.top };
+}
+
+/* ---- pointer handling: one path for mouse, pen and touch ------------- */
+function onDown(ev) {
+  hideMenu(); commitEditor();
+  const target = ev.target.closest("[data-menu],[data-slot],[data-block]");
+  if (!target) return;
+  if (target.dataset.menu) { openMenu(target.dataset.menu, ev); return; }
+  if (target.dataset.slot) { openEditor(target.dataset.slot); return; }
+
+  const fromPalette = palette.contains(target);
+  const id = target.dataset.block;
+  let block = fromPalette
+    ? Object.values(protos).find(p => subtree(p).some(b => b.id === id))
+    : findBlock(id);
+  if (!block) return;
+  if (fromPalette) {
+    block = cloneBlock(block);
+    const at = pointIn(canvas, ev);
+    block.x = at.x - 24;
+    block.y = at.y - 16;
+    project.scripts.push(block);
+    beginDrag(block, 24, 16, ev);
+    drawScripts();
+  } else {
+    const hit = block;
+    const rect = L.rect[hit.id];
+    if (hit.prev || hit.parent) {
+      detach(hit);
+      hit.x = rect.x; hit.y = rect.y;
+      project.scripts.push(hit);
+      drawScripts();
+    }
+    const at = pointIn(canvas, ev);
+    beginDrag(hit, at.x - hit.x, at.y - hit.y, ev);
+  }
+  ev.preventDefault();
+}
+function cloneBlock(proto) {
+  const copy = makeBlock(proto.spec);
+  Object.keys(proto.values).forEach(k => {
+    const v = proto.values[k];
+    copy.values[k] = (v && v.spec) ? cloneBlock(v) : v;
+    if (copy.values[k] && copy.values[k].spec) {
+      copy.values[k].parent = copy; copy.values[k].slot = k;
+    }
+  });
+  Object.keys(proto.fields).forEach(k => copy.fields[k] = proto.fields[k]);
+  return copy;
+}
+function beginDrag(block, offX, offY, ev) {
+  drag = { block, offX, offY, moved:false, targets:collectTargets(block) };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+}
+function onMove(ev) {
+  if (!drag) return;
+  const at = pointIn(canvas, ev);
+  const nx = at.x - drag.offX, ny = at.y - drag.offY;
+  if (Math.abs(nx - drag.block.x) > 1 || Math.abs(ny - drag.block.y) > 1) {
+    drag.moved = true;
+  }
+  drag.block.x = nx; drag.block.y = ny;
+  drawScripts();
+  showHint(bestTarget());
+}
+function onUp(ev) {
+  window.removeEventListener("pointermove", onMove);
+  window.removeEventListener("pointerup", onUp);
+  if (!drag) return;
+  const info = drag, target = bestTarget();
+  drag = null;
+  clearHint();
+  const overDrawer = ev.clientX <= drawer.getBoundingClientRect().right;
+  if (overDrawer) {
+    project.scripts = project.scripts.filter(s => s !== info.block);
+    drawScripts();
+    say("Block deleted.");
+    return;
+  }
+  if (target) applyTarget(info.block, target);
+  drawScripts();
+  if (!info.moved) clickBlock(info.block);
+}
+
+/* ---- snapping: a wide, short catching area, like Scratch ------------- */
+function collectTargets(dragged) {
+  const out = [];
+  const moving = subtree(dragged).map(b => b.id);
+  const spec = dragged.spec;
+  project.scripts.forEach(script => {
+    if (script === dragged) return;
+    subtree(script).forEach(b => {
+      if (moving.includes(b.id)) return;
+      const r = L.rect[b.id];
+      if (!r) return;
+      if (spec.value) {
+        b.spec.rows.forEach(row => row.forEach(tok => {
+          if (tok.t !== "in") return;
+          const slot = L.slot[b.id + "/" + tok.name];
+          if (slot) out.push({ kind:"slot", block:b, name:tok.name, ...slot });
+        }));
+        return;
+      }
+      if (spec.hasPrev && b.spec.hasNext) {
+        out.push({ kind:"after", block:b, x:r.x, y:r.y + r.h });
+      }
+      if (spec.hasPrev && b.spec.shape === "c") {
+        for (let i = 0; i < b.spec.mouths; i++) {
+          const m = L.mouth[b.id + "/" + i];
+          if (m) out.push({ kind:"into", block:b, index:i, x:m.x, y:m.y });
+        }
+      }
+    });
+    if (spec.hasNext && script.spec.hasPrev) {
+      const r = L.rect[script.id];
+      if (r) out.push({ kind:"before", block:script, x:r.x, y:r.y });
+    }
+  });
+  return out;
+}
+function bestTarget() {
+  if (!drag) return null;
+  const b = drag.block, size = L.size[b.id] || { w:40, h:40 };
+  let tail = 0, walk = b;
+  while (walk) { tail += (L.size[walk.id] || { h:0 }).h; walk = walk.next; }
+  let best = null, bestScore = Infinity;
+  drag.targets.forEach(t => {
+    let score = null;
+    if (t.kind === "slot") {
+      const px = b.x + 10, py = b.y + size.h / 2;
+      if (px >= t.x - 30 && px <= t.x + t.w + 30 &&
+          py >= t.y - 22 && py <= t.y + t.h + 22) {
+        score = Math.hypot(px - (t.x + t.w / 2), py - (t.y + t.h / 2));
+      }
+    } else {
+      const by = b.y + (t.kind === "before" ? tail : 0);
+      const dx = Math.abs(t.x - b.x), dy = Math.abs(t.y - by);
+      if (dx <= 110 && dy <= 44) score = dy + dx * 0.35;
+    }
+    if (score !== null && score < bestScore) { best = t; bestScore = score; }
+  });
+  return best;
+}
+function showHint(t) {
+  clearHint();
+  if (!t) return;
+  if (t.kind === "slot") {
+    el("rect", { x:t.x - 3, y:t.y - 3, width:t.w + 6, height:t.h + 6, rx:11,
+                 class:"hint", "fill-opacity":"0", "stroke-width":3,
+                 "data-hint":"1" }, canvas);
+  } else {
+    el("rect", { x:t.x + 2, y:t.y - 3, width:88, height:6, rx:3, class:"hint",
+                 "data-hint":"1" }, canvas);
+  }
+}
+function clearHint() {
+  canvas.querySelectorAll("[data-hint]").forEach(n => n.remove());
+}
+function applyTarget(block, t) {
+  project.scripts = project.scripts.filter(s => s !== block);
+  if (t.kind === "after") attachNext(t.block, block);
+  else if (t.kind === "into") attachBranch(t.block, t.index, block);
+  else if (t.kind === "slot") {
+    const old = attachSlot(t.block, t.name, block);
+    if (old) { old.parent = null; old.slot = null;
+               old.x = block.x + 30; old.y = block.y + 40;
+               project.scripts.push(old); }
+  } else if (t.kind === "before") {
+    project.scripts = project.scripts.filter(s => s !== t.block);
+    block.x = t.block.x; block.y = t.block.y - (L.size[block.id] || {h:0}).h;
+    attachNext(lastOf(block), t.block);
+    project.scripts.push(block);
+  }
+}
+
+/* ---- typing in a slot ------------------------------------------------ */
+let editing = null;
+function openEditor(key) {
+  const [id, name] = key.split("/");
+  const block = findBlock(id);
+  const slot = L.slot[key];
+  if (!block || !slot) return;
+  const box = stage.getBoundingClientRect();
+  const cbox = canvas.getBoundingClientRect();
+  editing = { block, name };
+  editor.value = String(block.values[name] === undefined ? "" : block.values[name]);
+  editor.style.display = "block";
+  editor.style.left = (cbox.left - box.left + slot.x - 1) + "px";
+  editor.style.top = (cbox.top - box.top + slot.y - 1) + "px";
+  editor.style.width = Math.max(slot.w, 54) + "px";
+  editor.style.height = slot.h + "px";
+  editor.style.borderColor = CATS[block.spec.cat].dark;
+  editor.focus();
+  editor.select();
+}
+function commitEditor() {
+  if (!editing) return;
+  const { block, name } = editing;
+  editing = null;
+  editor.style.display = "none";
+  block.values[name] = editor.value;
+  drawScripts();
+}
+editor.addEventListener("keydown", ev => {
+  if (ev.key === "Enter") { commitEditor(); ev.preventDefault(); }
+  if (ev.key === "Escape") { editing = null; editor.style.display = "none"; }
+});
+editor.addEventListener("blur", commitEditor);
+
+/* ---- the little dropdown -------------------------------------------- */
+function openMenu(key, ev) {
+  const [id, name] = key.split("/");
+  const block = findBlock(id) ||
+                Object.values(protos).flatMap(p => subtree(p)).find(b => b.id === id);
+  if (!block) return;
+  let tok = null;
+  block.spec.rows.forEach(row => row.forEach(t => {
+    if (t.t === "menu" && t.name === name) tok = t;
+  }));
+  if (!tok) return;
+  const options = tok.options === "@vars" ? project.vars.slice() : tok.options;
+  menu.textContent = "";
+  options.forEach(opt => {
+    const b = document.createElement("button");
+    b.textContent = opt;
+    b.addEventListener("click", () => {
+      block.fields[name] = opt;
+      hideMenu();
+      buildPalette();
+    });
+    menu.appendChild(b);
+  });
+  if (tok.options === "@vars") {
+    const b = document.createElement("button");
+    b.textContent = "Make a variable...";
+    b.addEventListener("click", () => { hideMenu(); makeVariable(); });
+    menu.appendChild(b);
+  }
+  menu.style.display = "block";
+  menu.style.left = Math.min(ev.clientX, window.innerWidth - 170) + "px";
+  menu.style.top = (ev.clientY + 6) + "px";
+}
+function hideMenu() { menu.style.display = "none"; }
+document.addEventListener("pointerdown", ev => {
+  if (!menu.contains(ev.target)) hideMenu();
+}, true);
+
+function makeVariable() {
+  const name = (prompt("Name for the new variable:") || "").trim();
+  if (!name) return;
+  if (!project.vars.includes(name)) {
+    project.vars.push(name);
+    project.starts[name] = "0";
+    varSpec(name);
+  }
+  buildPalette();
+  say('Variable "' + name + '" is ready.');
+}
+
+/* ---- click a loose block to try it ----------------------------------- */
+function clickBlock(block) {
+  const root = topOf(block);
+  let piece = block;
+  if (root.spec.hat) {
+    if (block !== root) return;      /* part of a real script: leave it be */
+    piece = block.next;
+    if (!piece) return;
+  }
+  const lines = [];
+  const ctx = {
+    vars:{}, steps:0,
+    say(line) { lines.push(line); printOut(line); }
+  };
+  project.vars.forEach(v => {
+    const start = String(project.starts[v] || "0").trim();
+    ctx.vars[v] = isNumberish(start) ? Number(start)
+                                     : start.replace(/^["']|["']$/g, "");
+  });
+  try {
+    if (piece.spec.value) lines.push(show(evaluate(ctx, piece)));
+    else {
+      const job = runStack(piece, ctx);
+      let guard = 0, step = job.next();
+      while (!step.done && guard++ < 20000) step = job.next();
+      if (guard >= 20000) lines.push("(stopped - that would go on forever)");
+    }
+    showBubble(piece, lines.length ? lines.join("\n") : "(it ran, but printed nothing)");
+  } catch (err) {
+    showBubble(piece, String(err && err.message ? err.message : err), true);
+  }
+}
+function showBubble(block, text, bad) {
+  canvas.querySelectorAll("[data-bubble]").forEach(n => n.remove());
+  const anchor = block.spec.value ? block : lastOf(block);
+  const r = L.rect[anchor.id];
+  if (!r) return;
+  const lines = String(text).split("\n").slice(0, 8);
+  const width = Math.max(70, ...lines.map(l => textWidth(l, false, 12) + 22));
+  const height = lines.length * 17 + 14;
+  const bx = r.x + 14, by = r.y + r.h + 11;
+  const g = el("g", { "data-bubble":"1" }, canvas);
+  el("path", { d:toPath([[bx + 9, by], [bx + 27, by], [bx + 18, by - 10]]),
+               class:"bubble-box",
+               style:bad ? "fill:#FFF6F6;stroke:#E38B8B" : "" }, g);
+  el("rect", { x:bx, y:by, width, height, rx:10, class:"bubble-box",
+               style:bad ? "fill:#FFF6F6;stroke:#E38B8B" : "" }, g);
+  el("path", { d:toPath([[bx + 10, by - 1], [bx + 26, by - 1], [bx + 18, by - 9]]),
+               fill:bad ? "#FFF6F6" : "#fff", stroke:"none" }, g);
+  lines.forEach((line, i) => {
+    const t = el("text", { x:bx + 11, y:by + 18 + i * 17, class:"bubble-text",
+                           style:bad ? "fill:#B3261E" : "" }, g);
+    t.textContent = line;
+  });
+  g.style.transformOrigin = bx + "px " + by + "px";
+  g.animate([{ transform:"scale(.82)" }, { transform:"scale(1)" }],
+            { duration:140, easing:"cubic-bezier(.2,.8,.2,1)" });
+}
+canvas.addEventListener("pointerdown", () => {
+  canvas.querySelectorAll("[data-bubble]").forEach(n => n.remove());
+});
+
+/* ---- the buttons along the top --------------------------------------- */
+document.getElementById("run").addEventListener("click", () => {
+  document.getElementById("out").textContent = "";
+  showPane("out");
+  const hats = project.scripts.filter(s => s.spec.id === "event_start" && s.next);
+  if (!hats.length) {
+    printOut("Nothing to run yet - snap some blocks under a green flag hat.",
+             "sys");
+    return;
+  }
+  printOut("--- running ---", "sys");
+  startRunning(hats.map(h => h.next), () => printOut("--- finished ---", "sys"));
+});
+document.getElementById("stop").addEventListener("click", () => {
+  stopRunning();
+  printOut("--- stopped ---", "sys");
+});
+document.getElementById("tidy").addEventListener("click", () => {
+  let y = 40;
+  project.scripts
+    .sort((a, b) => (a.spec.hat ? 0 : 1) - (b.spec.hat ? 0 : 1) || a.y - b.y)
+    .forEach(s => { s.x = 50; s.y = y; layoutScript(s); y += scriptBox(s).h + 26; });
+  drawScripts();
+  say("Tidied up.");
+});
+document.getElementById("wipe").addEventListener("click", () => {
+  if (project.scripts.length && !confirm("Remove every block?")) return;
+  project.scripts = [];
+  drawScripts();
+  say("Cleared.");
+});
+document.getElementById("example").addEventListener("click", loadExample);
+document.getElementById("copy").addEventListener("click", () => {
+  navigator.clipboard.writeText(buildPython())
+    .then(() => say("Python copied to the clipboard."))
+    .catch(() => say("Select the code and copy it by hand."));
+});
+document.getElementById("download").addEventListener("click", () => {
+  const blob = new Blob([buildPython()], { type:"text/x-python" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "demo.py";
+  link.click();
+  URL.revokeObjectURL(link.href);
+  say("Saved demo.py");
+});
+document.querySelectorAll(".tabs button").forEach(b =>
+  b.addEventListener("click", () => showPane(b.dataset.pane)));
+function showPane(which) {
+  document.querySelectorAll(".tabs button").forEach(b =>
+    b.classList.toggle("on", b.dataset.pane === which));
+  document.querySelectorAll(".pane").forEach(p =>
+    p.classList.toggle("on", p.id === which));
+}
+
+/* ---- an example to open with ----------------------------------------- */
+function put(id, values, fields) {
+  const b = makeBlock(SPECS[id]);
+  Object.keys(values || {}).forEach(k => {
+    const v = values[k];
+    if (v && v.spec) { b.values[k] = v; v.parent = b; v.slot = k; }
+    else b.values[k] = v;
+  });
+  Object.keys(fields || {}).forEach(k => b.fields[k] = fields[k]);
+  return b;
+}
+function stackUp(list) {
+  for (let i = 0; i < list.length - 1; i++) {
+    list[i].next = list[i + 1];
+    list[i + 1].prev = list[i];
+  }
+  return list[0];
+}
+function loadExample() {
+  project.scripts = [];
+  const hat = put("event_start");
+  const hello = put("text_print", { msg:"Counting to three:" });
+  const reset = put("var_set", { val:"0" }, { var:"score" });
+  const loop = put("control_repeat", { times:"3" });
+  const bump = put("var_change", { val:"1" }, { var:"score" });
+  const showIt = put("var_show", {}, { var:"score" });
+  const pause = put("control_wait", { secs:"0.3" });
+  loop.branches[0] = stackUp([bump, showIt, pause]);
+  bump.parent = loop; bump.slot = 0;
+  const test = put("op_compare", { a:makeBlock(SPECS["var::score"]), b:"2" },
+                   { op:">" });
+  test.values.a.parent = test; test.values.a.slot = "a";
+  const check = put("control_if", { cond:test });
+  const win = put("text_print", { msg:"That is a high score!" });
+  check.branches[0] = win; win.parent = check; win.slot = 0;
+  stackUp([hat, hello, reset, loop, check]);
+  hat.x = 60; hat.y = 40;
+  project.scripts.push(hat);
+
+  const loose = put("op_add", { a:"19", b:"23" });
+  loose.x = 430; loose.y = 300;
+  project.scripts.push(loose);
+
+  drawScripts();
+  say("Press Run, or click the loose green block to try it on its own.");
+}
+
+/* ---- go --------------------------------------------------------------- */
+palette.addEventListener("pointerdown", onDown);
+canvas.addEventListener("pointerdown", onDown);
+window.addEventListener("resize", () => { buildPalette(); });
+
+buildStrip();
+buildPalette();
+loadExample();
+showPane("code");
+
+</script>
+</body>
+</html>
