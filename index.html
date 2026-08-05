@@ -150,6 +150,38 @@ svg { display:block; }
   color:var(--ink); }
 .menu button:hover { background:#EEF1F6; }
 
+/* ---------- the import sheet ---------- */
+.sheet {
+  position:fixed; inset:0; background:rgba(30,36,48,.45); z-index:60;
+  display:none; align-items:center; justify-content:center; padding:20px;
+}
+.sheet .card {
+  background:#fff; border-radius:14px; padding:22px 24px; width:min(680px,100%);
+  box-shadow:0 20px 60px rgba(0,0,0,.3); animation:rise .16s
+  cubic-bezier(.2,.8,.2,1);
+}
+@keyframes rise { from { transform:translateY(10px) scale(.98); opacity:0; } }
+.sheet h2 { margin:0 0 6px; font-size:19px; color:#3A4356; }
+.sheet p { margin:0 0 12px; color:var(--muted); font-size:13px; line-height:1.5; }
+.sheet code { background:#EEF1F6; padding:1px 5px; border-radius:4px;
+  font-family:var(--mono); font-size:12px; }
+.sheet textarea {
+  width:100%; height:210px; font-family:var(--mono); font-size:12.5px;
+  border:1px solid var(--line); border-radius:8px; padding:10px; resize:vertical;
+  color:#3A4356; outline:none;
+}
+.sheet textarea:focus { border-color:var(--accent); }
+.sheet .warn { color:#B3261E; min-height:16px; margin:6px 0 0; }
+.sheet .row { display:flex; align-items:center; gap:10px; margin-top:14px; }
+.sheet .row button {
+  border:0; border-radius:8px; padding:9px 16px; font-size:13px;
+  background:#EEF1F6; color:var(--ink);
+}
+.sheet .row button.go { background:var(--accent); color:#fff; font-weight:600;
+  padding:9px 22px; }
+.sheet .file { font-size:13px; color:var(--accent); cursor:pointer; }
+.sheet .file input { display:none; }
+
 /* ---------- small screens ---------- */
 @media (max-width:900px) {
   main { flex-direction:column; overflow:auto; }
@@ -187,6 +219,11 @@ svg { display:block; }
   <button id="tidy">Clean up</button>
   <button id="wipe">Clear</button>
   <span class="sep"></span>
+  <button id="import-btn" class="icon-btn" title="Turn a Python file into blocks">
+    <svg class="flag" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 1v8M5 6l3 3 3-3M2 12v2h12v-2" stroke="#4C97FF"
+            stroke-width="1.8" fill="none" stroke-linecap="round"/>
+    </svg>Import .py</button>
   <button id="example">Load example</button>
   <span class="note" id="status">Drag a block out of the drawer to begin.</span>
 </div>
@@ -214,14 +251,35 @@ svg { display:block; }
 </main>
 <div class="menu" id="menu"></div>
 
+<div class="sheet" id="importer">
+  <div class="card">
+    <h2>Turn Python into blocks</h2>
+    <p>Paste a program, choose a <code>.py</code> file, or just drop one onto
+       the page. Loops, conditions, functions, lists and f-strings all become
+       real blocks. Anything unusual is kept word for word, so nothing is
+       lost.</p>
+    <textarea id="import-text" spellcheck="false"
+      placeholder="score = 0&#10;for i in range(5):&#10;    score = score + i&#10;    print(f'score is {score}')"></textarea>
+    <p class="warn" id="import-note"></p>
+    <div class="row">
+      <label class="file">Choose a file
+        <input type="file" id="import-file" accept=".py,.pyw,text/plain">
+      </label>
+      <span style="flex:1"></span>
+      <button id="import-cancel">Cancel</button>
+      <button id="import-go" class="go">Make blocks</button>
+    </div>
+  </div>
+</div>
+
 <script>
 "use strict";
 /* =====================================================================
    ScratchPy Studio - browser demo
    ---------------------------------------------------------------------
-   One file, no dependencies. Blocks are described once and that single
-   description drives three things: how they are drawn, the Python they
-   generate, and how they run here in the page.
+   One file, no dependencies. Every block is described once, and that one
+   description drives three things: how it is drawn, the Python it makes,
+   and how it runs here in the page.
    ===================================================================== */
 
 const CATS = {
@@ -229,19 +287,25 @@ const CATS = {
   control:   { name:"Control",   color:"#FFAB19", dark:"#CF8B17" },
   operators: { name:"Operators", color:"#59C059", dark:"#389438" },
   text:      { name:"Text",      color:"#9966FF", dark:"#774DCB" },
-  variables: { name:"Variables", color:"#FF8C1A", dark:"#DB6E00" }
+  variables: { name:"Variables", color:"#FF8C1A", dark:"#DB6E00" },
+  lists:     { name:"Lists",     color:"#FF661A", dark:"#E64D00" },
+  functions: { name:"Blocks",    color:"#FF6680", dark:"#FF3355" },
+  python:    { name:"Python",    color:"#4C97FF", dark:"#3373CC" }
 };
-const ORDER = ["events", "control", "operators", "text", "variables"];
+const ORDER = ["events", "control", "operators", "text", "variables",
+               "lists", "functions", "python"];
 
 /* ---------------------------------------------------------------- specs */
-/*  Rows are written in a tiny mark-up so a block is one readable line:
-      %n(name,default)  number slot      %s(name,default)  text slot
-      %a(name,default)  either           %b(name)          boolean hole
-      %d(name,a|b|c)    menu             %v(name)          variable menu    */
+/*  Rows use a tiny mark-up so a block is one readable line:
+      %n(name,default)  number      %s(name,default)  text
+      %a(name,default)  either      %b(name)          boolean hole
+      %r(name,default)  raw code    %f(name,default)  f-string
+      %d(name,a|b|c)    menu        %v(name)          variable menu
+      %l(name)          list menu                                        */
 
 const SPECS = {};
 const PALETTE = {}; ORDER.forEach(c => PALETTE[c] = []);
-const MARK = /%([nsabdv])\(([^()]*)\)/g;
+const MARK = /%([nsabrfdvl])\(([^()]*)\)/g;
 
 function parseRow(text) {
   const out = []; let at = 0; let m;
@@ -254,9 +318,12 @@ function parseRow(text) {
     const name = comma < 0 ? body : body.slice(0, comma);
     const rest = comma < 0 ? "" : body.slice(comma + 1);
     if (kind === "d") {
-      out.push({ t:"menu", name, options:rest.split("|"), def:rest.split("|")[0] });
+      const opts = rest.split("|");
+      out.push({ t:"menu", name, options:opts, def:opts[0] });
     } else if (kind === "v") {
       out.push({ t:"menu", name, options:"@vars", def:"score" });
+    } else if (kind === "l") {
+      out.push({ t:"menu", name, options:"@lists", def:"things" });
     } else {
       out.push({ t:"in", name, kind, def:rest });
     }
@@ -267,36 +334,62 @@ function parseRow(text) {
   return out;
 }
 
-function B(id, cat, shape, rows, code, run, listed = true) {
+function B(id, cat, shape, rows, code, run, opt) {
   if (typeof rows === "string") rows = [rows];
+  opt = opt || {};
   const spec = {
     id, cat, shape, rows: rows.map(parseRow), code, run,
+    needs: opt.needs || null, menuCode: opt.menuCode || null,
     mouths: shape === "c" ? rows.length : 0,
     value: shape === "reporter" || shape === "boolean",
-    hat: shape === "hat",
-    hasNext: shape === "hat" || shape === "stack" || shape === "c",
-    hasPrev: shape === "stack" || shape === "c"
+    hat: shape === "hat" || shape === "define",
+    hasNext: ["hat", "define", "stack", "c"].includes(shape),
+    hasPrev: ["stack", "cap", "c"].includes(shape)
   };
   SPECS[id] = spec;
-  if (listed) PALETTE[cat].push(id);
+  if (opt.listed !== false) PALETTE[cat].push(id);
   return spec;
 }
 
-/* -- events ----------------------------------------------------------- */
+/* ============================ EVENTS ================================= */
 B("event_start", "events", "hat", "when green flag clicked", "", null);
 
-/* -- control ---------------------------------------------------------- */
+B("event_receive", "events", "hat", "when I receive %s(msg,go)", "", null);
+
+B("event_broadcast", "events", "stack", "broadcast %s(msg,go)",
+  "broadcast({msg})",
+  function* (ctx, b) {
+    const name = String(text(ctx, b, "msg"));
+    for (const h of ctx.handlers.filter(h => h.name === name)) {
+      yield* runStack(h.body, ctx);
+    }
+  });
+
+/* ============================ CONTROL ================================ */
+B("control_wait", "control", "stack", "wait %n(secs,1) seconds",
+  "time.sleep({secs})",
+  function* (ctx, b) {
+    yield { until: performance.now() + Math.max(0, num(ctx, b, "secs")) * 1000 };
+  }, { needs:"time" });
+
 B("control_repeat", "control", "c", "repeat %n(times,10)",
   "for _ in range(int({times})):\n    {BODY0}",
   function* (ctx, b) {
-    const n = Math.min(10000, Math.max(0, Math.floor(num(ctx, b, "times"))));
-    for (let i = 0; i < n; i++) yield* runStack(b.branches[0], ctx);
+    const n = Math.min(100000, Math.max(0, Math.floor(num(ctx, b, "times"))));
+    for (let i = 0; i < n; i++) {
+      try { yield* runStack(b.branches[0], ctx); }
+      catch (e) { if (e === BREAK) break; if (e !== NEXT) throw e; }
+    }
   });
 
 B("control_forever", "control", "c", "forever",
   "while True:\n    {BODY0}",
   function* (ctx, b) {
-    while (true) { yield* runStack(b.branches[0], ctx); yield { tick:true }; }
+    while (true) {
+      try { yield* runStack(b.branches[0], ctx); }
+      catch (e) { if (e === BREAK) break; if (e !== NEXT) throw e; }
+      yield { tick:true };
+    }
   });
 
 B("control_if", "control", "c", "if %b(cond) then",
@@ -311,16 +404,78 @@ B("control_if_else", "control", "c", ["if %b(cond) then", "else"],
     yield* runStack(b.branches[truth(ctx, b, "cond") ? 0 : 1], ctx);
   });
 
-B("control_wait", "control", "stack", "wait %n(secs,1) seconds",
-  "time.sleep({secs})",
+B("control_while", "control", "c", "while %b(cond)",
+  "while {cond}:\n    {BODY0}",
   function* (ctx, b) {
-    const until = performance.now() + Math.max(0, num(ctx, b, "secs")) * 1000;
-    yield { until };
+    let guard = 0;
+    while (truth(ctx, b, "cond")) {
+      try { yield* runStack(b.branches[0], ctx); }
+      catch (e) { if (e === BREAK) break; if (e !== NEXT) throw e; }
+      if (++guard % 200 === 0) yield { tick:true };
+    }
   });
 
-/* -- operators -------------------------------------------------------- */
+B("control_until", "control", "c", "repeat until %b(cond)",
+  "while not {cond}:\n    {BODY0}",
+  function* (ctx, b) {
+    let guard = 0;
+    while (!truth(ctx, b, "cond")) {
+      try { yield* runStack(b.branches[0], ctx); }
+      catch (e) { if (e === BREAK) break; if (e !== NEXT) throw e; }
+      if (++guard % 200 === 0) yield { tick:true };
+    }
+  });
+
+B("control_wait_until", "control", "stack", "wait until %b(cond)",
+  "while not {cond}:\n    time.sleep(0.05)",
+  function* (ctx, b) {
+    let guard = 0;
+    while (!truth(ctx, b, "cond")) {
+      yield { tick:true };
+      if (++guard > 20000) break;
+    }
+  }, { needs:"time" });
+
+B("control_count", "control", "c",
+  "count with %v(var) from %n(a,1) to %n(b,10)",
+  "for {var} in range(int({a}), int({b}) + 1):\n    {BODY0}",
+  function* (ctx, b) {
+    const from = Math.floor(num(ctx, b, "a")), to = Math.floor(num(ctx, b, "b"));
+    for (let i = from; i <= to && i - from < 100000; i++) {
+      setVar(ctx, b.fields.var, i);
+      try { yield* runStack(b.branches[0], ctx); }
+      catch (e) { if (e === BREAK) break; if (e !== NEXT) throw e; }
+    }
+  });
+
+B("control_for_each", "control", "c", "for each %v(var) in %l(list)",
+  "for {var} in {list}:\n    {BODY0}",
+  function* (ctx, b) {
+    for (const item of listOf(ctx, b, "list").slice()) {
+      setVar(ctx, b.fields.var, item);
+      try { yield* runStack(b.branches[0], ctx); }
+      catch (e) { if (e === BREAK) break; if (e !== NEXT) throw e; }
+    }
+  });
+
+B("control_break", "control", "cap", "break out of the loop", "break",
+  function* () { throw BREAK; });
+B("control_next", "control", "cap", "skip to the next loop turn", "continue",
+  function* () { throw NEXT; });
+B("control_pass", "control", "stack", "do nothing", "pass",
+  function* () {});
+B("control_stop", "control", "cap", "stop everything", "raise SystemExit",
+  function* () { throw STOP; });
+
+/* =========================== OPERATORS =============================== */
 B("op_add", "operators", "reporter", "%n(a,) + %n(b,)", "({a} + {b})",
-  (c, b) => num(c, b, "a") + num(c, b, "b"));
+  (c, b) => {
+    /* Python's + adds numbers, joins text and joins lists */
+    const x = any(c, b, "a"), y = any(c, b, "b");
+    if (isNumberish(x) && isNumberish(y)) return Number(x) + Number(y);
+    if (Array.isArray(x) && Array.isArray(y)) return x.concat(y);
+    return show(x) + show(y);
+  });
 B("op_sub", "operators", "reporter", "%n(a,) - %n(b,)", "({a} - {b})",
   (c, b) => num(c, b, "a") - num(c, b, "b"));
 B("op_mul", "operators", "reporter", "%n(a,) * %n(b,)", "({a} * {b})",
@@ -329,16 +484,30 @@ B("op_div", "operators", "reporter", "%n(a,) / %n(b,)", "({a} / {b})",
   (c, b) => { const d = num(c, b, "b");
               if (!d) throw new Error("ZeroDivisionError: division by zero");
               return num(c, b, "a") / d; });
+B("op_floor", "operators", "reporter", "%n(a,) / %n(b,) rounded down",
+  "({a} // {b})",
+  (c, b) => { const d = num(c, b, "b");
+              if (!d) throw new Error("ZeroDivisionError: division by zero");
+              return Math.floor(num(c, b, "a") / d); });
+B("op_mod", "operators", "reporter", "%n(a,) mod %n(b,)", "({a} % {b})",
+  (c, b) => { const d = num(c, b, "b");
+              if (!d) throw new Error("ZeroDivisionError: modulo by zero");
+              const x = num(c, b, "a");
+              return ((x % d) + d) % d; });
+B("op_pow", "operators", "reporter", "%n(a,2) to the power of %n(b,8)",
+  "({a} ** {b})", (c, b) => Math.pow(num(c, b, "a"), num(c, b, "b")));
 
-B("op_compare", "operators", "boolean", "%a(a,) %d(op,<|>|==|!=) %a(b,)",
-  "({a} {op} {b})",
+B("op_compare", "operators", "boolean",
+  "%a(a,) %d(op,<|>|==|!=|<=|>=) %a(b,)", "({a} {op} {b})",
   (c, b) => {
-    const x = any(c, b, "a"), y = any(c, b, "b");
+    const x = any(c, b, "a"), y = any(c, b, "b"), d = cmp(x, y);
     switch (b.fields.op) {
-      case "<": return cmp(x, y) < 0;
-      case ">": return cmp(x, y) > 0;
-      case "==": return String(x) === String(y);
-      default: return String(x) !== String(y);
+      case "<": return d < 0;
+      case ">": return d > 0;
+      case "<=": return d <= 0;
+      case ">=": return d >= 0;
+      case "==": return same(x, y);
+      default: return !same(x, y);
     }
   });
 
@@ -348,88 +517,368 @@ B("op_or", "operators", "boolean", "%b(a) or %b(b)", "({a} or {b})",
   (c, b) => truth(c, b, "a") || truth(c, b, "b"));
 B("op_not", "operators", "boolean", "not %b(a)", "(not {a})",
   (c, b) => !truth(c, b, "a"));
+B("op_true", "operators", "boolean", "true", "True", () => true);
+B("op_false", "operators", "boolean", "false", "False", () => false);
+B("op_between", "operators", "boolean",
+  "%n(v,5) is between %n(a,1) and %n(b,10)", "({a} <= {v} <= {b})",
+  (c, b) => num(c, b, "a") <= num(c, b, "v") &&
+            num(c, b, "v") <= num(c, b, "b"));
 
 B("op_random", "operators", "reporter", "pick random %n(a,1) to %n(b,10)",
   "random.randint(int({a}), int({b}))",
   (c, b) => {
     const lo = Math.ceil(num(c, b, "a")), hi = Math.floor(num(c, b, "b"));
     return lo + Math.floor(Math.random() * (hi - lo + 1));
-  });
+  }, { needs:"random" });
+B("op_random_decimal", "operators", "reporter", "random decimal 0 to 1",
+  "random.random()", () => Math.random(), { needs:"random" });
 
 B("op_round", "operators", "reporter", "round %n(a,3.7)", "round({a})",
   (c, b) => Math.round(num(c, b, "a")));
+B("op_round_to", "operators", "reporter",
+  "round %n(a,3.14159) to %n(n,2) decimals", "round({a}, int({n}))",
+  (c, b) => {
+    const p = Math.pow(10, Math.floor(num(c, b, "n")));
+    return Math.round(num(c, b, "a") * p) / p;
+  });
 
-/* -- text ------------------------------------------------------------- */
+const MATHS = {
+  abs:{ py:"abs", js:Math.abs }, floor:{ py:"math.floor", js:Math.floor },
+  ceil:{ py:"math.ceil", js:Math.ceil }, sqrt:{ py:"math.sqrt", js:Math.sqrt },
+  sin:{ py:"math.sin", js:Math.sin }, cos:{ py:"math.cos", js:Math.cos },
+  tan:{ py:"math.tan", js:Math.tan }, ln:{ py:"math.log", js:Math.log },
+  log:{ py:"math.log10", js:Math.log10 }, "e^":{ py:"math.exp", js:Math.exp }
+};
+B("op_math", "operators", "reporter",
+  "%d(fn,abs|floor|ceil|sqrt|sin|cos|tan|ln|log|e^) of %n(a,9)", "{fn}({a})",
+  (c, b) => MATHS[b.fields.fn].js(num(c, b, "a")),
+  { needs:"math", menuCode:{ fn:v => MATHS[v].py } });
+
+B("op_min_max", "operators", "reporter",
+  "%d(fn,min|max) of %n(a,1) and %n(b,2)", "{fn}({a}, {b})",
+  (c, b) => Math[b.fields.fn](num(c, b, "a"), num(c, b, "b")));
+B("op_pi", "operators", "reporter", "pi", "math.pi", () => Math.PI,
+  { needs:"math" });
+
+B("op_convert", "operators", "reporter",
+  "%a(v,3.7) as %d(t,int|float|str|bool)", "{t}({v})",
+  (c, b) => {
+    const v = any(c, b, "v");
+    if (b.fields.t === "int") return Math.trunc(Number(v)) || 0;
+    if (b.fields.t === "float") return Number(v) || 0;
+    if (b.fields.t === "str") return show(v);
+    return truthy(v);
+  });
+B("op_is_number", "operators", "boolean", "%a(v,7) is a number",
+  "isinstance({v}, (int, float))", (c, b) => isNumberish(any(c, b, "v")));
+
+/* ============================== TEXT ================================= */
 B("text_print", "text", "stack", "print %a(msg,Hello world!)", "print({msg})",
   function* (ctx, b) { ctx.say(show(any(ctx, b, "msg"))); });
+
+B("text_print2", "text", "stack", "print %a(a,Score:) and %a(b,0)",
+  "print({a}, {b})",
+  function* (ctx, b) {
+    ctx.say(show(any(ctx, b, "a")) + " " + show(any(ctx, b, "b")));
+  });
+
+/* print with three or four things, so an imported file keeps its shape */
+B("text_print3", "text", "stack", "print %a(a,) %a(b,) %a(c,)",
+  "print({a}, {b}, {c})",
+  function* (ctx, b) {
+    ctx.say([show(any(ctx, b, "a")), show(any(ctx, b, "b")),
+             show(any(ctx, b, "c"))].join(" "));
+  }, { listed:false });
+B("text_print4", "text", "stack", "print %a(a,) %a(b,) %a(c,) %a(d,)",
+  "print({a}, {b}, {c}, {d})",
+  function* (ctx, b) {
+    ctx.say([show(any(ctx, b, "a")), show(any(ctx, b, "b")),
+             show(any(ctx, b, "c")), show(any(ctx, b, "d"))].join(" "));
+  }, { listed:false });
+
+B("text_fprint", "text", "stack", "print sentence %f(msg,My score is {score})",
+  "print({msg})",
+  function* (ctx, b) { ctx.say(fstring(ctx, String(b.values.msg || ""))); });
+
+B("text_sentence", "text", "reporter", "sentence %f(t,Hello {name}!)", "{t}",
+  (c, b) => fstring(c, String(b.values.t || "")));
+
+B("text_ask", "text", "reporter", "ask %s(prompt,What is your name?) and wait",
+  "input({prompt})",
+  (c, b) => {
+    const answer = window.prompt(show(text(c, b, "prompt")));
+    return answer === null ? "" : answer;
+  });
 
 B("text_join", "text", "reporter", "join %a(a,apple ) %a(b,banana)",
   "(str({a}) + str({b}))",
   (c, b) => show(any(c, b, "a")) + show(any(c, b, "b")));
-
-B("text_length", "text", "reporter", "length of %a(s,world)", "len(str({s}))",
-  (c, b) => show(any(c, b, "s")).length);
-
-B("text_upper", "text", "reporter", "%a(s,hello) in upper case",
-  "str({s}).upper()", (c, b) => show(any(c, b, "s")).toUpperCase());
-
 B("text_letter", "text", "reporter", "letter %n(i,1) of %a(s,world)",
   "str({s})[int({i}) - 1]",
   (c, b) => show(any(c, b, "s")).charAt(Math.floor(num(c, b, "i")) - 1));
+B("text_length", "text", "reporter", "length of %a(s,world)", "len(str({s}))",
+  (c, b) => show(any(c, b, "s")).length);
+B("text_contains", "text", "boolean", "%a(s,apple) contains %a(sub,a)",
+  "(str({sub}) in str({s}))",
+  (c, b) => show(any(c, b, "s")).includes(show(any(c, b, "sub"))));
+B("text_case", "text", "reporter",
+  "%a(s,hello) in %d(case,upper|lower|title) case", "str({s}).{case}()",
+  (c, b) => {
+    const s = show(any(c, b, "s"));
+    if (b.fields.case === "upper") return s.toUpperCase();
+    if (b.fields.case === "lower") return s.toLowerCase();
+    return s.replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase());
+  });
+B("text_replace", "text", "reporter",
+  "replace %a(x,a) with %a(y,o) in %a(s,banana)",
+  "str({s}).replace(str({x}), str({y}))",
+  (c, b) => show(any(c, b, "s")).split(show(any(c, b, "x")))
+                                .join(show(any(c, b, "y"))));
+B("text_split", "text", "reporter", "split %a(s,a,b,c) by %a(sep,,)",
+  "str({s}).split(str({sep}))",
+  (c, b) => show(any(c, b, "s")).split(show(any(c, b, "sep"))));
+B("text_strip", "text", "reporter", "%a(s, hi ) without spaces around it",
+  "str({s}).strip()", (c, b) => show(any(c, b, "s")).trim());
+B("text_repeat", "text", "reporter", "%a(s,ha) repeated %n(n,3) times",
+  "(str({s}) * int({n}))",
+  (c, b) => show(any(c, b, "s")).repeat(Math.max(0, Math.floor(num(c, b, "n")))));
+B("text_find", "text", "reporter", "position of %a(sub,a) in %a(s,banana)",
+  "(str({s}).find(str({sub})) + 1)",
+  (c, b) => show(any(c, b, "s")).indexOf(show(any(c, b, "sub"))) + 1);
+B("text_starts", "text", "boolean", "%a(s,banana) starts with %a(sub,ba)",
+  "str({s}).startswith(str({sub}))",
+  (c, b) => show(any(c, b, "s")).startsWith(show(any(c, b, "sub"))));
 
-/* -- variables -------------------------------------------------------- */
+/* =========================== VARIABLES =============================== */
 B("var_set", "variables", "stack", "set %v(var) to %a(val,0)", "{var} = {val}",
-  function* (ctx, b) { ctx.vars[b.fields.var] = any(ctx, b, "val"); });
+  function* (ctx, b) { setVar(ctx, b.fields.var, any(ctx, b, "val")); });
 
 B("var_change", "variables", "stack", "change %v(var) by %n(val,1)",
   "{var} = {var} + {val}",
   function* (ctx, b) {
-    const now = Number(ctx.vars[b.fields.var]);
-    ctx.vars[b.fields.var] = (isNaN(now) ? 0 : now) + num(ctx, b, "val");
+    const now = Number(getVar(ctx, b.fields.var));
+    setVar(ctx, b.fields.var, (isNaN(now) ? 0 : now) + num(ctx, b, "val"));
   });
 
-B("var_show", "variables", "stack", "print %v(var)", 'print({var})',
-  function* (ctx, b) { ctx.say(show(ctx.vars[b.fields.var])); });
+B("var_show", "variables", "stack", "print %v(var)", "print({var})",
+  function* (ctx, b) { ctx.say(show(getVar(ctx, b.fields.var))); });
 
-/* a rounded reporter for each variable, made as they are created */
+/* =============================== LISTS =============================== */
+B("list_add", "lists", "stack", "add %a(item,thing) to %l(list)",
+  "{list}.append({item})",
+  function* (ctx, b) { listOf(ctx, b, "list").push(any(ctx, b, "item")); });
+
+B("list_delete", "lists", "stack", "delete item %n(i,1) of %l(list)",
+  "del {list}[int({i}) - 1]",
+  function* (ctx, b) {
+    listOf(ctx, b, "list").splice(Math.floor(num(ctx, b, "i")) - 1, 1);
+  });
+
+B("list_clear", "lists", "stack", "delete all of %l(list)", "{list}.clear()",
+  function* (ctx, b) { listOf(ctx, b, "list").length = 0; });
+
+B("list_insert", "lists", "stack", "insert %a(item,thing) at %n(i,1) of %l(list)",
+  "{list}.insert(int({i}) - 1, {item})",
+  function* (ctx, b) {
+    listOf(ctx, b, "list").splice(Math.floor(num(ctx, b, "i")) - 1, 0,
+                                  any(ctx, b, "item"));
+  });
+
+B("list_replace", "lists", "stack",
+  "replace item %n(i,1) of %l(list) with %a(item,thing)",
+  "{list}[int({i}) - 1] = {item}",
+  function* (ctx, b) {
+    listOf(ctx, b, "list")[Math.floor(num(ctx, b, "i")) - 1] = any(ctx, b, "item");
+  });
+
+B("list_set_all", "lists", "stack", "set %l(list) to %a(seq)", "{list} = list({seq})",
+  function* (ctx, b) {
+    const v = any(ctx, b, "seq");
+    ctx.lists[b.fields.list] = Array.isArray(v) ? v.slice()
+                             : (typeof v === "string" ? v.split("") : []);
+  });
+
+B("list_item", "lists", "reporter", "item %n(i,1) of %l(list)",
+  "{list}[int({i}) - 1]",
+  (c, b) => {
+    const list = listOf(c, b, "list"), i = Math.floor(num(c, b, "i")) - 1;
+    if (i < 0 || i >= list.length)
+      throw new Error("IndexError: list index out of range");
+    return list[i];
+  });
+
+B("list_last", "lists", "reporter", "last item of %l(list)", "{list}[-1]",
+  (c, b) => {
+    const list = listOf(c, b, "list");
+    if (!list.length) throw new Error("IndexError: list index out of range");
+    return list[list.length - 1];
+  });
+
+B("list_index", "lists", "reporter", "index of %a(item,thing) in %l(list)",
+  "({list}.index({item}) + 1)",
+  (c, b) => listOf(c, b, "list").findIndex(v => same(v, any(c, b, "item"))) + 1);
+
+B("list_length", "lists", "reporter", "length of %l(list)", "len({list})",
+  (c, b) => listOf(c, b, "list").length);
+
+B("list_contains", "lists", "boolean", "%l(list) contains %a(item,thing)",
+  "({item} in {list})",
+  (c, b) => listOf(c, b, "list").some(v => same(v, any(c, b, "item"))));
+
+B("list_join", "lists", "reporter", "join %l(list) with %a(sep,, )",
+  "str({sep}).join(str(_x) for _x in {list})",
+  (c, b) => listOf(c, b, "list").map(show).join(show(any(c, b, "sep"))));
+
+B("list_sort", "lists", "stack", "sort %l(list)", "{list}.sort()",
+  function* (ctx, b) { listOf(ctx, b, "list").sort((x, y) => cmp(x, y)); });
+B("list_reverse", "lists", "stack", "reverse %l(list)", "{list}.reverse()",
+  function* (ctx, b) { listOf(ctx, b, "list").reverse(); });
+B("list_shuffle", "lists", "stack", "shuffle %l(list)", "random.shuffle({list})",
+  function* (ctx, b) {
+    const list = listOf(ctx, b, "list");
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+  }, { needs:"random" });
+
+B("list_maths", "lists", "reporter", "%d(fn,sum|max|min|len) of %l(list)",
+  "{fn}({list})",
+  (c, b) => {
+    const list = listOf(c, b, "list").map(v => Number(v) || 0);
+    if (b.fields.fn === "len") return list.length;
+    if (!list.length) return 0;
+    if (b.fields.fn === "sum") return list.reduce((a, v) => a + v, 0);
+    return b.fields.fn === "max" ? Math.max(...list) : Math.min(...list);
+  });
+
+B("list_average", "lists", "reporter", "average of %l(list)",
+  "(sum({list}) / len({list}))",
+  (c, b) => {
+    const list = listOf(c, b, "list").map(v => Number(v) || 0);
+    if (!list.length) throw new Error("ZeroDivisionError: division by zero");
+    return list.reduce((a, v) => a + v, 0) / list.length;
+  });
+
+B("list_copy", "lists", "reporter", "copy of %l(list)", "list({list})",
+  (c, b) => listOf(c, b, "list").slice());
+B("list_range", "lists", "reporter", "numbers from %n(a,1) to %n(b,10)",
+  "list(range(int({a}), int({b}) + 1))",
+  (c, b) => {
+    const out = [], from = Math.floor(num(c, b, "a")), to = Math.floor(num(c, b, "b"));
+    for (let i = from; i <= to && out.length < 100000; i++) out.push(i);
+    return out;
+  });
+B("list_new", "lists", "reporter", "empty list", "[]", () => []);
+B("list_slice", "lists", "reporter", "items %n(a,1) to %n(b,3) of %l(list)",
+  "{list}[int({a}) - 1:int({b})]",
+  (c, b) => listOf(c, b, "list").slice(Math.floor(num(c, b, "a")) - 1,
+                                       Math.floor(num(c, b, "b"))));
+
+/* ============================ MY BLOCKS ============================== */
+B("func_return", "functions", "cap", "return %a(val,0)", "return {val}",
+  function* (ctx, b) { throw { ret:any(ctx, b, "val") }; });
+B("func_return_none", "functions", "cap", "return", "return",
+  function* () { throw { ret:null }; });
+
+/* ============================== PYTHON =============================== */
+B("py_stmt", "python", "stack", "python %r(code,pass)", "{code}",
+  function* (ctx, b) {
+    ctx.say("(the demo cannot run raw Python: " +
+            firstLine(String(b.values.code || "")) + ")");
+  });
+
+B("py_code", "python", "stack", "python code %r(code,pass)", "{code}",
+  function* (ctx, b) {
+    ctx.say("(kept as written, runs in the desktop app: " +
+            firstLine(String(b.values.code || "")) + ")");
+  }, { listed:false });
+
+B("py_expr", "python", "reporter", "value of %r(code,2 ** 10)", "{code}",
+  (c, b) => literalValue(String(b.values.code || "")));
+
+B("py_comment", "python", "stack", "note %r(text,explain your code)",
+  "# {text}", function* () {});
+
+B("py_import", "python", "stack", "import %r(module,math)", "import {module}",
+  function* () {});
+
+B("py_dict_new", "python", "reporter", "empty record", "{}", () => ({}));
+B("py_dict_get", "python", "reporter", "%r(d,record) at key %a(k,name)",
+  "{d}[{k}]", () => "?");
+B("py_dict_set", "python", "stack",
+  "set key %a(k,name) of %r(d,record) to %a(v,)", "{d}[{k}] = {v}",
+  function* () {});
+B("py_none", "python", "reporter", "nothing", "None", () => null);
+B("py_type", "python", "reporter", "type of %a(v,hello)", "type({v}).__name__",
+  (c, b) => {
+    const v = any(c, b, "v");
+    if (Array.isArray(v)) return "list";
+    if (v === null) return "NoneType";
+    if (typeof v === "boolean") return "bool";
+    if (isNumberish(v)) return Number.isInteger(Number(v)) ? "int" : "float";
+    return typeof v === "object" ? "dict" : "str";
+  });
+B("py_raise", "python", "cap", "stop with error %a(msg,something went wrong)",
+  "raise Exception({msg})",
+  function* (ctx, b) { throw new Error(show(any(ctx, b, "msg"))); });
+
+/* -------- reporters made for each variable, list and block parameter -- */
 function varSpec(name) {
   const id = "var::" + name;
   if (!SPECS[id]) {
-    const spec = B(id, "variables", "reporter", [name], pyName(name),
-                   (c) => c.vars[name], false);
-    spec.varName = name;
+    SPECS[id] = B(id, "variables", "reporter", [name], pyName(name),
+                  (c) => getVar(c, name), { listed:false });
+    SPECS[id].varName = name;
   }
   return SPECS[id];
 }
-
-/* ------------------------------------------------------- small helpers */
-function pyName(name) {
-  let s = String(name).replace(/[^0-9A-Za-z_]/g, "_");
-  if (!s || /^[0-9]/.test(s)) s = "v_" + s;
-  return s;
-}
-function isNumberish(v) {
-  return v !== "" && v !== null && !isNaN(Number(v));
-}
-function cmp(a, b) {
-  if (isNumberish(a) && isNumberish(b)) return Number(a) - Number(b);
-  return String(a) < String(b) ? -1 : (String(a) > String(b) ? 1 : 0);
-}
-function show(v) {
-  if (v === true) return "True";
-  if (v === false) return "False";
-  if (v === null || v === undefined) return "";
-  if (typeof v === "number") {
-    return Number.isInteger(v) ? String(v) : String(Math.round(v * 1e10) / 1e10);
+function listSpec(name) {
+  const id = "list::" + name;
+  if (!SPECS[id]) {
+    SPECS[id] = B(id, "lists", "reporter", [name], pyName(name),
+                  (c) => (c.lists[name] = c.lists[name] || []), { listed:false });
+    SPECS[id].listName = name;
   }
-  return String(v);
+  return SPECS[id];
+}
+function paramSpec(fn, name) {
+  const id = "param::" + fn + "::" + name;
+  if (!SPECS[id]) {
+    SPECS[id] = B(id, "functions", "reporter", [name], pyName(name),
+                  (c) => getVar(c, name), { listed:false });
+    SPECS[id].varName = name;
+  }
+  return SPECS[id];
+}
+/* a custom block: the define hat, and the block that calls it */
+function funcSpecs(fn) {
+  const py = pyName(fn.name);
+  let label = "define " + fn.name;
+  if (fn.params.length) label += " (" + fn.params.join(", ") + ")";
+  const defId = "func::" + fn.name + "::def";
+  SPECS[defId] = B(defId, "functions", "define", [label], "", null,
+                   { listed:false });
+  SPECS[defId].func = fn;
+
+  let row = fn.name;
+  fn.params.forEach((p, i) => { row += " %a(p" + i + "," + p + ")"; });
+  const args = fn.params.map((p, i) => "{p" + i + "}").join(", ");
+  const callId = "func::" + fn.name;
+  SPECS[callId] = B(callId, "functions", fn.returns ? "reporter" : "stack",
+                    [row], py + "(" + args + ")",
+                    fn.returns ? ((c, b) => callFunction(c, fn, b))
+                               : function* (ctx, b) { callFunction(ctx, fn, b); },
+                    { listed:false });
+  SPECS[callId].func = fn;
+  fn.params.forEach(p => paramSpec(fn.name, p));
 }
 
-/* ------------------------------------------------------- block objects */
+/* ======================================================= block objects */
 let seq = 0;
 function makeBlock(spec) {
   const b = {
-    id: "b" + (++seq), spec, values:{}, fields:{}, next:null, prev:null,
+    id:"b" + (++seq), spec, values:{}, fields:{}, next:null, prev:null,
     parent:null, slot:null, branches:new Array(spec.mouths).fill(null),
     x:0, y:0
   };
@@ -439,7 +888,6 @@ function makeBlock(spec) {
   }));
   return b;
 }
-function chain(b) { const out = []; while (b) { out.push(b); b = b.next; } return out; }
 function lastOf(b) { while (b.next) b = b.next; return b; }
 function topOf(b) {
   while (true) {
@@ -491,9 +939,13 @@ function attachSlot(a, name, b) {
 const project = {
   scripts: [],
   vars: ["score", "name"],
-  starts: { score:"0", name:'""' }
+  starts: { score:"0", name:'""' },
+  lists: ["things"],
+  funcs: [],
+  imports: []          /* module level imports kept from a file you brought in */
 };
 project.vars.forEach(varSpec);
+project.lists.forEach(listSpec);
 
 /* ===================================================================== */
 /*  Geometry - the puzzle outlines that make a block look like Scratch    */
@@ -785,20 +1237,77 @@ function drawStack(host, b, rootId) {
 }
 
 /* ===================================================================== */
+/*  Values: close enough to Python to be honest about what it prints     */
+/* ===================================================================== */
+
+const BREAK = { signal:"break" };
+const NEXT  = { signal:"continue" };
+const STOP  = { signal:"stop" };
+
+function pyName(name) {
+  let s = String(name).replace(/[^0-9A-Za-z_]/g, "_");
+  if (!s || /^[0-9]/.test(s)) s = "v_" + s;
+  return s;
+}
+function isNumberish(v) {
+  if (typeof v === "number") return true;
+  if (typeof v !== "string" || v.trim() === "") return false;
+  return !isNaN(Number(v));
+}
+function truthy(v) {
+  if (Array.isArray(v)) return v.length > 0;
+  return !(v === false || v === "" || v === 0 || v === undefined ||
+           v === null || v === "False");
+}
+function cmp(a, b) {
+  if (isNumberish(a) && isNumberish(b)) return Number(a) - Number(b);
+  const x = show(a), y = show(b);
+  return x < y ? -1 : (x > y ? 1 : 0);
+}
+function same(a, b) {
+  if (isNumberish(a) && isNumberish(b)) return Number(a) === Number(b);
+  return show(a) === show(b);
+}
+function repr(v) {
+  if (typeof v === "string") return "'" + v.replace(/'/g, "\\'") + "'";
+  return show(v);
+}
+function show(v) {
+  if (v === true) return "True";
+  if (v === false) return "False";
+  if (v === null || v === undefined) return "None";
+  if (Array.isArray(v)) return "[" + v.map(repr).join(", ") + "]";
+  if (typeof v === "number") {
+    if (Number.isInteger(v)) return String(v);
+    return String(Math.round(v * 1e10) / 1e10);
+  }
+  if (typeof v === "object") {
+    return "{" + Object.keys(v).map(k => repr(k) + ": " + repr(v[k])).join(", ") + "}";
+  }
+  return String(v);
+}
+function firstLine(text) {
+  const line = String(text).split("\n")[0];
+  return line.length > 40 ? line.slice(0, 40) + "..." : line;
+}
+
+/* ===================================================================== */
 /*  Python, written from the very same block descriptions                */
 /* ===================================================================== */
 
 function pyStr(s) { return JSON.stringify(String(s === undefined ? "" : s)); }
-function pyNum(t) {
-  t = String(t === undefined ? "" : t).trim();
-  if (t === "") return "0";
-  if (isNumberish(t)) return t;
-  return pyStr(t);
+function pyNum(v) {
+  const t = String(v === undefined ? "" : v);
+  if (t.trim() === "") return "0";
+  if (isNumberish(t.trim())) return t.trim();
+  return pyStr(t);          /* quote what was typed, spaces and all */
 }
 function pyAny(t) {
   t = String(t === undefined ? "" : t);
-  if (t.trim() === "") return '""';
+  if (t === "") return '""';          /* a slot holding spaces means spaces */
   if (isNumberish(t.trim())) return t.trim();
+  if (t.trim() === "True" || t.trim() === "False" || t.trim() === "None")
+    return t.trim();
   return pyStr(t);
 }
 function slotPython(b, tok) {
@@ -806,6 +1315,8 @@ function slotPython(b, tok) {
   if (v && v.spec) return expressionPython(v);
   if (tok.kind === "n") return pyNum(v);
   if (tok.kind === "s") return pyStr(v);
+  if (tok.kind === "r") return String(v === undefined ? "" : v);
+  if (tok.kind === "f") return "f" + pyStr(v);
   if (tok.kind === "b") return "False";
   return pyAny(v);
 }
@@ -814,8 +1325,14 @@ function valuesPython(b) {
   b.spec.rows.forEach(row => row.forEach(tok => {
     if (tok.t === "in") out[tok.name] = slotPython(b, tok);
     else if (tok.t === "menu") {
-      out[tok.name] = tok.options === "@vars" ? pyName(b.fields[tok.name])
-                                              : b.fields[tok.name];
+      const chosen = b.fields[tok.name];
+      if (b.spec.menuCode && b.spec.menuCode[tok.name]) {
+        out[tok.name] = b.spec.menuCode[tok.name](chosen);
+      } else if (tok.options === "@vars" || tok.options === "@lists") {
+        out[tok.name] = pyName(chosen);
+      } else {
+        out[tok.name] = chosen;
+      }
     }
   }));
   return out;
@@ -826,6 +1343,7 @@ function fill(template, values) {
 }
 function expressionPython(b) {
   if (b.spec.varName) return pyName(b.spec.varName);
+  if (b.spec.listName) return pyName(b.spec.listName);
   return fill(b.spec.code || "None", valuesPython(b));
 }
 function statementPython(b) {
@@ -839,7 +1357,8 @@ function statementPython(b) {
       if (!body.length) body = ["pass"];
       body.forEach(l => out.push(m[1] + l));
     } else if (line.trim()) {
-      out.push(fill(line, values));
+      const filled = fill(line, values);
+      filled.split("\n").forEach(part => out.push(part));
     }
   });
   return out;
@@ -849,37 +1368,87 @@ function stackPython(b) {
   while (b) { out = out.concat(statementPython(b)); b = b.next; }
   return out;
 }
-function usesBlock(id) {
-  return project.scripts.some(s => subtree(s).some(b => b.spec.id === id));
+function everyBlock() {
+  const all = [];
+  project.scripts.forEach(s => subtree(s).forEach(b => all.push(b)));
+  return all;
 }
 function buildPython() {
+  const all = everyBlock();
   const lines = ['"""', "demo - generated by ScratchPy Studio.", "",
                  "Built out of the blocks next door. Copy it into a file and",
                  "it runs like any other Python program.", '"""', ""];
   const needs = [];
-  if (usesBlock("control_wait")) needs.push("time");
-  if (usesBlock("op_random")) needs.push("random");
-  needs.sort().forEach(n => lines.push("import " + n));
-  if (needs.length) lines.push("");
-  if (project.vars.length) {
+  all.forEach(b => {
+    if (b.spec.needs && !needs.includes(b.spec.needs)) needs.push(b.spec.needs);
+  });
+  const kept = project.imports.slice();
+  needs.sort().forEach(n => {
+    if (!kept.some(line => line === "import " + n)) kept.push("import " + n);
+  });
+  kept.forEach(line => lines.push(line));
+  if (kept.length) lines.push("");
+
+  const wantsMessages = all.some(b => b.spec.id === "event_broadcast") ||
+                        project.scripts.some(s => s.spec.id === "event_receive");
+  if (wantsMessages) {
+    lines.push("_HANDLERS = {}", "", "",
+               "def when_i_receive(name):",
+               '    """Register a function as the handler for a message."""',
+               "    def deco(fn):",
+               "        _HANDLERS.setdefault(name, []).append(fn)",
+               "        return fn",
+               "    return deco", "", "",
+               "def broadcast(name):",
+               '    """Run every handler registered for this message."""',
+               "    for fn in _HANDLERS.get(name, []):",
+               "        fn()", "", "");
+  }
+  if (project.vars.length || project.lists.length) {
     lines.push("# ---- variables ----");
     project.vars.forEach(v =>
       lines.push(pyName(v) + " = " + (project.starts[v] || "0")));
+    project.lists.forEach(v => lines.push(pyName(v) + " = []"));
     lines.push("");
   }
+
+  /* custom blocks first, so anything can call them */
+  project.scripts.filter(s => s.spec.shape === "define").forEach(s => {
+    const fn = s.spec.func;
+    lines.push("def " + pyName(fn.name) + "(" +
+               fn.params.map(pyName).join(", ") + "):");
+    lines.push('    """Custom block: ' + fn.name + '"""');
+    const body = stackPython(s.next);
+    const touched = globalsTouched(s.next, fn.params);
+    if (touched.length) lines.push("    global " + touched.join(", "));
+    (body.length ? body : ["pass"]).forEach(l => lines.push("    " + l));
+    lines.push("", "");
+  });
+
+  /* message handlers */
+  project.scripts.filter(s => s.spec.id === "event_receive").forEach((s, i) => {
+    const msg = String(s.values.msg || "message");
+    lines.push("@when_i_receive(" + pyStr(msg) + ")");
+    lines.push("def on_" + pyName(msg) + (i ? "_" + i : "") + "():");
+    const body = stackPython(s.next);
+    const touched = globalsTouched(s.next, []);
+    if (touched.length) lines.push("    global " + touched.join(", "));
+    (body.length ? body : ["pass"]).forEach(l => lines.push("    " + l));
+    lines.push("", "");
+  });
+
   const body = [];
   let loose = 0;
   project.scripts.forEach(s => {
     if (s.spec.id === "event_start") stackPython(s.next).forEach(l => body.push(l));
-    else loose++;
+    else if (s.spec.shape !== "define" && s.spec.id !== "event_receive") loose++;
   });
   const touched = [];
-  project.scripts.forEach(s => subtree(s).forEach(b => {
-    if (b.spec.id === "var_set" || b.spec.id === "var_change") {
-      const n = pyName(b.fields.var);
+  project.scripts.filter(s => s.spec.id === "event_start").forEach(s => {
+    globalsTouched(s.next, []).forEach(n => {
       if (!touched.includes(n)) touched.push(n);
-    }
-  }));
+    });
+  });
   lines.push("def main():");
   lines.push('    """Everything under the green flag."""');
   if (touched.length) lines.push("    global " + touched.join(", "));
@@ -892,13 +1461,32 @@ function buildPython() {
   }
   return lines.join("\n");
 }
+function globalsTouched(first, skip) {
+  const names = [];
+  let b = first;
+  while (b) {
+    subtree(b).forEach(d => {
+      let name = null;
+      if (d.spec.id === "var_set" || d.spec.id === "var_change" ||
+          d.spec.id === "control_count" || d.spec.id === "control_for_each") {
+        name = d.fields.var;
+      } else if (d.spec.id === "list_set_all") name = d.fields.list;
+      if (!name || skip.includes(name)) return;
+      const known = project.vars.includes(name) || project.lists.includes(name);
+      const py = pyName(name);
+      if (known && !names.includes(py)) names.push(py);
+    });
+    b = b.next;
+  }
+  return names;
+}
 
 /* a light dusting of colour for the code panel */
 function paintPython(src) {
-  const words = /\b(def|if|else|elif|for|while|in|return|import|global|not|and|or|True|False|None|pass|range|print|int|str|len|round|random|time)\b/g;
+  const words = /\b(def|if|else|elif|for|while|in|return|import|global|not|and|or|True|False|None|pass|break|continue|raise|range|print|int|str|float|bool|len|round|abs|min|max|sum|list|input|random|time|math)\b/g;
   return src
     .replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c]))
-    .replace(/(&quot;|")([^"\n]*)("|&quot;)/g, '<span class="st">$1$2$3</span>')
+    .replace(/("[^"\n]*")/g, '<span class="st">$1</span>')
     .replace(/#[^\n]*/g, m => '<span class="cm">' + m + "</span>")
     .replace(words, m => '<span class="kw">' + m + "</span>")
     .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="nm">$1</span>');
@@ -908,26 +1496,70 @@ function paintPython(src) {
 /*  Running the blocks here in the page                                  */
 /* ===================================================================== */
 
+function getVar(ctx, name) {
+  for (let i = ctx.scopes.length - 1; i >= 0; i--) {
+    if (name in ctx.scopes[i]) return ctx.scopes[i][name];
+  }
+  return ctx.vars[name];
+}
+function setVar(ctx, name, value) {
+  for (let i = ctx.scopes.length - 1; i >= 0; i--) {
+    if (name in ctx.scopes[i]) { ctx.scopes[i][name] = value; return; }
+  }
+  ctx.vars[name] = value;
+}
+function listOf(ctx, b, name) {
+  const key = b.fields[name];
+  if (!Array.isArray(ctx.lists[key])) ctx.lists[key] = [];
+  return ctx.lists[key];
+}
 function num(ctx, b, name) {
-  const v = valueOf(ctx, b, name);
-  const n = Number(v);
+  const n = Number(valueOf(ctx, b, name));
   return isNaN(n) ? 0 : n;
 }
 function any(ctx, b, name) { return valueOf(ctx, b, name); }
-function truth(ctx, b, name) {
-  const v = valueOf(ctx, b, name);
-  return !(v === false || v === "" || v === 0 || v === undefined || v === null ||
-           v === "False");
-}
+function text(ctx, b, name) { return show(valueOf(ctx, b, name)); }
+function truth(ctx, b, name) { return truthy(valueOf(ctx, b, name)); }
 function valueOf(ctx, b, name) {
   const v = b.values[name];
   if (v && v.spec) return evaluate(ctx, v);
   return v;
 }
 function evaluate(ctx, b) {
-  if (b.spec.varName) return ctx.vars[b.spec.varName];
+  if (b.spec.varName) return getVar(ctx, b.spec.varName);
+  if (b.spec.listName) {
+    if (!Array.isArray(ctx.lists[b.spec.listName])) ctx.lists[b.spec.listName] = [];
+    return ctx.lists[b.spec.listName];
+  }
   if (!b.spec.run) return "";
   return b.spec.run(ctx, b);
+}
+function fstring(ctx, template) {
+  return String(template).replace(/\{([^{}]+)\}/g, (whole, name) => {
+    const key = name.trim();
+    const v = getVar(ctx, key);
+    if (v !== undefined) return show(v);
+    if (Array.isArray(ctx.lists[key])) return show(ctx.lists[key]);
+    return whole;
+  });
+}
+function callFunction(ctx, fn, block) {
+  if (!fn.body) return null;
+  const frame = {};
+  fn.params.forEach((p, i) => { frame[p] = any(ctx, block, "p" + i); });
+  ctx.scopes.push(frame);
+  let result = null;
+  try {
+    const job = runStack(fn.body, ctx);
+    let guard = 0, step = job.next();
+    while (!step.done && guard++ < 200000) step = job.next();
+  } catch (err) {
+    ctx.scopes.pop();
+    if (err && typeof err === "object" && "ret" in err) return err.ret;
+    throw err;
+  }
+  ctx.scopes.pop();
+  return result;
 }
 function* runStack(b, ctx) {
   while (b) {
@@ -938,21 +1570,32 @@ function* runStack(b, ctx) {
   }
 }
 
+function freshContext(say) {
+  const ctx = { vars:{}, lists:{}, scopes:[], steps:0, handlers:[], say };
+  project.vars.forEach(v => {
+    const start = String(project.starts[v] || "0").trim();
+    if (start === '""' || start === "''") ctx.vars[v] = "";
+    else if (isNumberish(start)) ctx.vars[v] = Number(start);
+    else ctx.vars[v] = start.replace(/^["']|["']$/g, "");
+  });
+  project.lists.forEach(v => ctx.lists[v] = []);
+  /* let custom blocks and messages find their bodies */
+  project.scripts.forEach(s => {
+    if (s.spec.shape === "define" && s.spec.func) s.spec.func.body = s.next;
+    if (s.spec.id === "event_receive") {
+      ctx.handlers.push({ name:String(s.values.msg || ""), body:s.next });
+    }
+  });
+  return ctx;
+}
+
 let runner = null;
 function startRunning(scripts, onDone) {
   stopRunning();
-  const ctx = {
-    vars:{}, steps:0,
-    say(line) { printOut(line); }
-  };
-  project.vars.forEach(v => {
-    const start = String(project.starts[v] || "0").trim();
-    ctx.vars[v] = start === '""' || start === "''" ? "" :
-                  (isNumberish(start) ? Number(start) : start.replace(/^["']|["']$/g, ""));
-  });
+  const ctx = freshContext(line => printOut(line));
   const jobs = scripts.map(s => runStack(s, ctx));
   let at = 0;
-  const state = { stopped:false, timer:null, frame:null };
+  const state = { stopped:false, timer:null };
   runner = state;
 
   function pump() {
@@ -963,13 +1606,16 @@ function startRunning(scripts, onDone) {
       let step;
       try { step = jobs[at].next(); }
       catch (err) {
-        printOut(String(err && err.message ? err.message : err), "err");
+        if (err === STOP) { finish(); return; }
+        if (err !== BREAK && err !== NEXT) {
+          printOut(errorText(err), "err");
+        }
         at++; continue;
       }
       if (step.done) { at++; continue; }
       if (step.value && step.value.until) {
-        const wait = Math.max(0, step.value.until - performance.now());
-        state.timer = setTimeout(pump, wait);
+        state.timer = setTimeout(pump,
+                                 Math.max(0, step.value.until - performance.now()));
         return;
       }
     }
@@ -992,6 +1638,1139 @@ function stopRunning() {
   if (runner.timer) clearTimeout(runner.timer);
   runner = null;
   document.querySelector("#run .flag").classList.remove("running");
+}
+function errorText(err) {
+  if (err && err.message) return err.message;
+  if (err && err.signal) return "(" + err.signal + " outside a loop)";
+  return String(err);
+}
+
+/* =====================================================================
+   Reading Python
+   ---------------------------------------------------------------------
+   A small tokeniser and recursive descent parser, enough to understand
+   ordinary scripts. Anything it does not recognise is kept word for word
+   in a "python" block, so no file is ever refused and nothing is lost.
+   ===================================================================== */
+
+const KEYWORDS = ["if", "elif", "else", "while", "for", "in", "def", "return",
+                  "break", "continue", "pass", "import", "from", "as", "and",
+                  "or", "not", "is", "True", "False", "None", "global",
+                  "raise", "try", "except", "finally", "with", "class",
+                  "lambda", "assert", "del", "yield", "async", "await"];
+const OPS = ["**=", "//=", ">>=", "<<=", "...", "**", "//", "==", "!=", "<=",
+             ">=", "->", ":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+             ">>", "<<", "+", "-", "*", "/", "%", "=", "<", ">", "(", ")",
+             "[", "]", "{", "}", ",", ":", ".", ";", "@", "&", "|", "^", "~"];
+
+function tokenise(source) {
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  const tokens = [];
+  const indents = [0];
+  let depth = 0, row = 0;
+
+  while (row < lines.length) {
+    let line = lines[row];
+    let at = 0;
+    if (depth === 0) {
+      /* blank lines and whole line comments never affect indentation */
+      const bare = line.trim();
+      if (bare === "" || bare.startsWith("#")) { row++; continue; }
+      while (at < line.length && (line[at] === " " || line[at] === "\t")) {
+        at += line[at] === "\t" ? 8 : 1;
+      }
+      const width = at;
+      if (width > indents[indents.length - 1]) {
+        indents.push(width);
+        tokens.push({ type:"indent", row });
+      } else {
+        while (width < indents[indents.length - 1]) {
+          indents.pop();
+          tokens.push({ type:"dedent", row });
+        }
+      }
+    }
+    while (at < line.length) {
+      const ch = line[at];
+      if (ch === " " || ch === "\t") { at++; continue; }
+      if (ch === "#") break;
+      if (ch === "\\" && at === line.length - 1) {          /* joined line */
+        row++; line = lines[row] || ""; at = 0; continue;
+      }
+      /* strings, including triple quoted and prefixed ones */
+      const strStart = line.slice(at).match(/^([rRbBuUfF]{0,2})("""|'''|"|')/);
+      if (strStart) {
+        const prefix = strStart[1], quote = strStart[2];
+        let from = at + prefix.length + quote.length;
+        let text = "", done = false;
+        while (!done) {
+          while (from < line.length) {
+            if (line[from] === "\\") { text += line.slice(from, from + 2); from += 2; continue; }
+            if (line.startsWith(quote, from)) { done = true; break; }
+            text += line[from++];
+          }
+          if (done) break;
+          if (quote.length === 3) {
+            text += "\n"; row++;
+            if (row >= lines.length) { done = true; break; }
+            line = lines[row]; from = 0;
+          } else { done = true; }
+        }
+        tokens.push({ type:"str", value:text, prefix:prefix.toLowerCase(),
+                      quote, row });
+        at = from + quote.length;
+        continue;
+      }
+      const number = line.slice(at).match(/^\d+\.?\d*(?:[eE][+-]?\d+)?|^\.\d+/);
+      if (number) {
+        tokens.push({ type:"num", value:number[0], row });
+        at += number[0].length;
+        continue;
+      }
+      const word = line.slice(at).match(/^[A-Za-z_][A-Za-z_0-9]*/);
+      if (word) {
+        tokens.push({ type:KEYWORDS.includes(word[0]) ? "kw" : "name",
+                      value:word[0], row });
+        at += word[0].length;
+        continue;
+      }
+      const op = OPS.find(o => line.startsWith(o, at));
+      if (op) {
+        if ("([{".includes(op)) depth++;
+        if (")]}".includes(op)) depth = Math.max(0, depth - 1);
+        tokens.push({ type:"op", value:op, row });
+        at += op.length;
+        continue;
+      }
+      tokens.push({ type:"op", value:ch, row });     /* something odd */
+      at++;
+    }
+    if (depth === 0 && tokens.length && tokens[tokens.length - 1].type !== "newline") {
+      tokens.push({ type:"newline", row });
+    }
+    row++;
+  }
+  while (indents.length > 1) { indents.pop(); tokens.push({ type:"dedent", row }); }
+  tokens.push({ type:"end", row });
+  return tokens;
+}
+
+/* ------------------------------------------------------------ parser -- */
+function parsePython(source) {
+  const tokens = tokenise(source);
+  const srcLines = source.replace(/\r\n?/g, "\n").split("\n");
+  let i = 0;
+
+  const peek = (n) => tokens[i + (n || 0)] || tokens[tokens.length - 1];
+  const at = (type, value) => {
+    const t = peek();
+    return t.type === type && (value === undefined || t.value === value);
+  };
+  const take = () => tokens[i++];
+  const expect = (type, value) => {
+    if (!at(type, value)) throw new ParseError(peek());
+    return take();
+  };
+  function ParseError(token) { this.token = token; this.parse = true; }
+
+  function raw(fromRow, toRow) {
+    const chunk = srcLines.slice(fromRow, toRow + 1);
+    let pad = Infinity;
+    chunk.forEach(l => {
+      if (l.trim()) pad = Math.min(pad, l.length - l.trimStart().length);
+    });
+    if (!isFinite(pad)) pad = 0;
+    return chunk.map(l => l.slice(pad)).join("\n").replace(/\s+$/, "");
+  }
+  function skipNewlines() { while (at("newline")) take(); }
+
+  /* ---- a block of statements at one indentation level ---------------- */
+  function suite() {
+    const body = [];
+    expect("op", ":");
+    skipNewlines();
+    if (at("indent")) {
+      take();
+      while (!at("dedent") && !at("end")) {
+        const stmt = statement();
+        if (stmt) body.push(stmt);
+        skipNewlines();
+      }
+      if (at("dedent")) take();
+    } else {
+      const stmt = statement();          /* one liner after the colon */
+      if (stmt) body.push(stmt);
+    }
+    return body;
+  }
+
+  /* skip a whole compound statement we do not model, keeping its text */
+  function swallow(startRow) {
+    let last = startRow;
+    const eat = () => {
+      while (!at("newline") && !at("end")) { last = peek().row; take(); }
+      if (at("newline")) take();
+    };
+    while (!at("op", ":") && !at("newline") && !at("end")) { last = peek().row; take(); }
+    if (at("op", ":")) { last = peek().row; take(); }
+    eat();
+    if (at("indent")) {
+      let level = 0;
+      do {
+        const t = take();
+        if (t.type === "indent") level++;
+        else if (t.type === "dedent") level--;
+        else last = Math.max(last, t.row);
+      } while (level > 0 && !at("end"));
+    }
+    return { kind:"raw", text:raw(startRow, last), row:startRow };
+  }
+
+  function statement() {
+    skipNewlines();
+    if (at("end") || at("dedent")) return null;
+    const start = peek().row;
+
+    if (at("kw", "if")) {
+      take();
+      const test = expression();
+      const body = suite();
+      let orelse = [];
+      skipNewlines();
+      if (at("kw", "elif")) {
+        const inner = { ...statement2elif() };
+        orelse = [inner];
+      } else if (at("kw", "else")) {
+        take(); orelse = suite();
+      }
+      return { kind:"if", test, body, orelse, row:start };
+    }
+    if (at("kw", "while")) {
+      take();
+      const test = expression();
+      const body = suite();
+      return { kind:"while", test, body, row:start };
+    }
+    if (at("kw", "for")) {
+      take();
+      const target = at("name") ? take().value : null;
+      if (!target) return swallow(start);
+      if (!at("kw", "in")) return swallow(start);
+      take();
+      const iter = expression();
+      const body = suite();
+      return { kind:"for", target, iter, body, row:start };
+    }
+    if (at("kw", "def")) {
+      take();
+      const name = at("name") ? take().value : null;
+      if (!name || !at("op", "(")) return swallow(start);
+      take();
+      const params = [];
+      let plain = true;
+      while (!at("op", ")") && !at("end")) {
+        if (at("name")) params.push(take().value);
+        else { plain = false; take(); }
+        if (at("op", ",")) take();
+        else if (!at("op", ")")) { plain = false; take(); }
+      }
+      if (at("op", ")")) take();
+      if (!plain) return swallow(start);
+      const body = suite();
+      return { kind:"def", name, params, body, row:start };
+    }
+    if (at("kw", "return")) {
+      take();
+      const value = (at("newline") || at("end")) ? null : expression();
+      return { kind:"return", value, row:start };
+    }
+    if (at("kw", "break")) { take(); return { kind:"break", row:start }; }
+    if (at("kw", "continue")) { take(); return { kind:"continue", row:start }; }
+    if (at("kw", "pass")) { take(); return { kind:"pass", row:start }; }
+    if (at("kw", "global")) {
+      while (!at("newline") && !at("end")) take();
+      return { kind:"pass", row:start, quiet:true };
+    }
+    if (at("kw", "import") || at("kw", "from")) {
+      const words = [];
+      while (!at("newline") && !at("end")) words.push(take().value);
+      return { kind:"import", text:words.join(" ").replace(/ \./g, ".")
+                 .replace(/\. /g, "."), row:start };
+    }
+    if (at("kw", "raise")) {
+      take();
+      const value = (at("newline") || at("end")) ? null : expression();
+      return { kind:"raise", value, row:start };
+    }
+    if (at("kw", "try") || at("kw", "with") || at("kw", "class") ||
+        at("kw", "async") || at("op", "@")) {
+      return swallow(start);
+    }
+
+    /* an expression, an assignment, or something we keep as it is */
+    let saved = i;
+    let target;
+    try { target = expression(); }
+    catch (err) { i = saved; return swallow(start); }
+
+    if (at("op", "=")) {
+      take();
+      let value;
+      try { value = expression(); }
+      catch (err) { i = saved; return swallow(start); }
+      endLine();
+      return { kind:"assign", target, value, row:start };
+    }
+    const aug = ["+=", "-=", "*=", "/=", "//=", "%=", "**="]
+                  .find(o => at("op", o));
+    if (aug) {
+      take();
+      let value;
+      try { value = expression(); }
+      catch (err) { i = saved; return swallow(start); }
+      endLine();
+      return { kind:"augassign", op:aug[0], target, value, row:start };
+    }
+    endLine();
+    return { kind:"expr", value:target, row:start };
+  }
+  function statement2elif() {
+    /* an elif is just an if that starts where the elif keyword is */
+    const start = peek().row;
+    take();
+    const test = expression();
+    const body = suite();
+    let orelse = [];
+    skipNewlines();
+    if (at("kw", "elif")) orelse = [statement2elif()];
+    else if (at("kw", "else")) { take(); orelse = suite(); }
+    return { kind:"if", test, body, orelse, row:start };
+  }
+  function endLine() {
+    while (!at("newline") && !at("end") && !at("dedent")) take();
+    if (at("newline")) take();
+  }
+
+  /* ---- expressions, loosest binding first ---------------------------- */
+  function expression() { return orExpr(); }
+  function orExpr() {
+    let left = andExpr();
+    while (at("kw", "or")) { take(); left = { kind:"bool", op:"or", left, right:andExpr() }; }
+    return left;
+  }
+  function andExpr() {
+    let left = notExpr();
+    while (at("kw", "and")) { take(); left = { kind:"bool", op:"and", left, right:notExpr() }; }
+    return left;
+  }
+  function notExpr() {
+    if (at("kw", "not")) { take(); return { kind:"not", value:notExpr() }; }
+    return comparison();
+  }
+  function comparison() {
+    let left = arith();
+    const ops = ["==", "!=", "<=", ">=", "<", ">"];
+    while (true) {
+      const op = ops.find(o => at("op", o));
+      if (op) { take(); left = { kind:"compare", op, left, right:arith() }; continue; }
+      if (at("kw", "in")) { take(); left = { kind:"in", left, right:arith() }; continue; }
+      if (at("kw", "not") && peek(1).type === "kw" && peek(1).value === "in") {
+        take(); take();
+        left = { kind:"not", value:{ kind:"in", left, right:arith() } };
+        continue;
+      }
+      if (at("kw", "is")) {
+        take();
+        let negate = false;
+        if (at("kw", "not")) { take(); negate = true; }
+        const node = { kind:"compare", op:"==", left, right:arith() };
+        left = negate ? { kind:"not", value:node } : node;
+        continue;
+      }
+      return left;
+    }
+  }
+  function arith() {
+    let left = term();
+    while (at("op", "+") || at("op", "-")) {
+      const op = take().value;
+      left = { kind:"binop", op, left, right:term() };
+    }
+    return left;
+  }
+  function term() {
+    let left = unary();
+    while (at("op", "*") || at("op", "/") || at("op", "//") || at("op", "%")) {
+      const op = take().value;
+      left = { kind:"binop", op, left, right:unary() };
+    }
+    return left;
+  }
+  function unary() {
+    if (at("op", "-")) { take(); return { kind:"neg", value:unary() }; }
+    if (at("op", "+")) { take(); return unary(); }
+    return power();
+  }
+  function power() {
+    const base = postfix();
+    if (at("op", "**")) { take(); return { kind:"binop", op:"**", left:base, right:unary() }; }
+    return base;
+  }
+  function postfix() {
+    let node = atom();
+    while (true) {
+      if (at("op", "(")) {
+        take();
+        const args = [];
+        while (!at("op", ")") && !at("end")) {
+          if (at("name") && peek(1).type === "op" && peek(1).value === "=") {
+            take(); take();
+            args.push({ keyword:true, value:expression() });
+          } else args.push(expression());
+          if (at("op", ",")) take(); else break;
+        }
+        expect("op", ")");
+        node = { kind:"call", func:node, args };
+      } else if (at("op", "[")) {
+        take();
+        const index = at("op", ":") ? null : expression();
+        if (at("op", ":")) {
+          take();
+          const to = at("op", "]") ? null : expression();
+          expect("op", "]");
+          node = { kind:"slice", value:node, from:index, to };
+        } else {
+          expect("op", "]");
+          node = { kind:"index", value:node, index };
+        }
+      } else if (at("op", ".")) {
+        take();
+        const name = expect("name").value;
+        node = { kind:"attr", value:node, name };
+      } else return node;
+    }
+  }
+  function atom() {
+    const t = peek();
+    if (t.type === "num") { take(); return { kind:"num", value:t.value }; }
+    if (t.type === "str") {
+      take();
+      return { kind:"str", value:t.value, fstring:t.prefix.includes("f") };
+    }
+    if (t.type === "name") { take(); return { kind:"name", value:t.value }; }
+    if (t.type === "kw" && ["True", "False", "None"].includes(t.value)) {
+      take(); return { kind:"const", value:t.value };
+    }
+    if (at("op", "(")) {
+      take();
+      const inner = expression();
+      if (at("op", ",")) throw new ParseError(peek());     /* tuples: keep raw */
+      expect("op", ")");
+      return inner;
+    }
+    if (at("op", "[")) {
+      take();
+      const items = [];
+      while (!at("op", "]") && !at("end")) {
+        items.push(expression());
+        if (at("op", ",")) take(); else break;
+      }
+      if (at("kw", "for")) throw new ParseError(peek());   /* comprehension */
+      expect("op", "]");
+      return { kind:"list", items };
+    }
+    if (at("op", "{")) {
+      take();
+      const pairs = [];
+      while (!at("op", "}") && !at("end")) {
+        const key = expression();
+        expect("op", ":");
+        pairs.push([key, expression()]);
+        if (at("op", ",")) take(); else break;
+      }
+      expect("op", "}");
+      return { kind:"dict", pairs };
+    }
+    throw new ParseError(t);
+  }
+
+  /* ---- go ------------------------------------------------------------ */
+  const body = [];
+  skipNewlines();
+  while (!at("end")) {
+    const before = i;
+    let stmt;
+    try { stmt = statement(); }
+    catch (err) {
+      if (!err || !err.parse) throw err;
+      i = before;
+      stmt = swallow(peek().row);
+    }
+    if (stmt) body.push(stmt);
+    if (i === before) i++;                    /* never spin on the spot */
+    skipNewlines();
+  }
+  return body;
+}
+
+/* =====================================================================
+   Turning that syntax tree into blocks
+   ===================================================================== */
+
+const BIN_BLOCK = { "+":"op_add", "-":"op_sub", "*":"op_mul", "/":"op_div",
+                    "//":"op_floor", "%":"op_mod", "**":"op_pow" };
+const MATH_CALL = { "math.sqrt":"sqrt", "math.floor":"floor", "math.ceil":"ceil",
+                    "math.sin":"sin", "math.cos":"cos", "math.tan":"tan",
+                    "math.log":"ln", "math.log10":"log", "math.exp":"e^" };
+
+function importPython(source) {
+  const report = { blocks:0, raw:0, notes:[] };
+  let tree;
+  try { tree = parsePython(source); }
+  catch (err) { throw new Error("Could not read that file: " + err); }
+
+  const state = { params:[], funcs:{}, report };
+
+  /* first pass: learn which names are lists, which are plain variables,
+     and what custom blocks exist                                        */
+  const lists = [], vars = [];
+  (function scan(nodes) {
+    nodes.forEach(node => {
+      if (node.kind === "assign" && node.target.kind === "name") {
+        const listy = node.value.kind === "list" ||
+          (node.value.kind === "call" && ["list", "sorted"]
+             .includes(nameOf(node.value.func)));
+        (listy ? lists : vars).push(node.target.value);
+      }
+      if (node.kind === "augassign" && node.target.kind === "name") {
+        vars.push(node.target.value);
+      }
+      if (node.kind === "for") vars.push(node.target);
+      if (node.kind === "def") {
+        state.funcs[node.name] = {
+          name:node.name, params:node.params,
+          returns:hasReturnValue(node.body), body:null
+        };
+      }
+      ["body", "orelse"].forEach(k => { if (node[k]) scan(node[k]); });
+    });
+  })(tree);
+  lists.forEach(name => {
+    if (!project.lists.includes(name)) { project.lists.push(name); listSpec(name); }
+  });
+  vars.forEach(name => {
+    if (lists.includes(name)) return;
+    if (!project.vars.includes(name)) {
+      project.vars.push(name);
+      project.starts[name] = "0";
+      varSpec(name);
+    }
+  });
+  Object.values(state.funcs).forEach(fn => {
+    if (!project.funcs.some(f => f.name === fn.name)) project.funcs.push(fn);
+    funcSpecs(fn);
+  });
+
+  /* second pass: build the blocks */
+  const scripts = [];
+  const main = [];
+  tree.forEach(node => {
+    if (node.kind === "import") {
+      /* module level imports belong at the top of the file, not inside main */
+      if (!project.imports.includes(node.text)) project.imports.push(node.text);
+    } else if (node.kind === "def" && state.funcs[node.name]) {
+      const hat = makeBlock(SPECS["func::" + node.name + "::def"]);
+      state.params = node.params;
+      const body = buildBody(node.body, state);
+      state.params = [];
+      if (body.length) { hat.next = body[0]; body[0].prev = hat; }
+      scripts.push(hat);
+    } else if (isMainGuard(node)) {
+      node.body.forEach(inner => main.push(inner));
+    } else {
+      main.push(node);
+    }
+  });
+  const hat = makeBlock(SPECS.event_start);
+  const body = buildBody(main, state);
+  if (body.length) { hat.next = body[0]; body[0].prev = hat; }
+  scripts.unshift(hat);
+
+  let y = 40;
+  scripts.forEach(s => {
+    s.x = 60; s.y = y;
+    layoutScript(s);
+    y += scriptBox(s).h + 30;
+    report.blocks += subtree(s).length;
+  });
+  return { scripts, report };
+}
+
+function isMainGuard(node) {
+  return node.kind === "if" && node.test && node.test.kind === "compare" &&
+         nameOf(node.test.left) === "__name__";
+}
+function hasReturnValue(body) {
+  let found = false;
+  (function walk(nodes) {
+    nodes.forEach(n => {
+      if (n.kind === "return" && n.value) found = true;
+      ["body", "orelse"].forEach(k => { if (n[k]) walk(n[k]); });
+    });
+  })(body);
+  return found;
+}
+function isTextish(node) {
+  if (!node) return false;
+  if (node.kind === "str") return true;
+  if (node.kind === "call") {
+    const n = nameOf(node.func);
+    if (n === "str" || n === "input") return true;
+    if (node.func.kind === "attr" &&
+        ["upper", "lower", "title", "strip", "replace", "join"]
+          .includes(node.func.name)) return true;
+  }
+  return false;
+}
+function nameOf(node) {
+  if (!node) return "";
+  if (node.kind === "name") return node.value;
+  if (node.kind === "attr") return nameOf(node.value) + "." + node.name;
+  return "";
+}
+
+/* ---- statements ------------------------------------------------------ */
+function buildBody(nodes, state) {
+  const blocks = [];
+  nodes.forEach(node => {
+    buildStatement(node, state).forEach(b => blocks.push(b));
+  });
+  for (let i = 0; i < blocks.length - 1; i++) {
+    blocks[i].next = blocks[i + 1];
+    blocks[i + 1].prev = blocks[i];
+  }
+  return blocks;
+}
+function attachBody(block, index, nodes, state) {
+  const body = buildBody(nodes, state);
+  if (body.length) {
+    block.branches[index] = body[0];
+    body[0].parent = block;
+    body[0].slot = index;
+  }
+}
+function rawBlock(text, state) {
+  state.report.raw++;
+  const b = makeBlock(SPECS[text.includes("\n") ? "py_code" : "py_stmt"]);
+  b.values.code = text;
+  return b;
+}
+function put(id, slots, fields, state) {
+  const b = makeBlock(SPECS[id]);
+  Object.keys(slots || {}).forEach(key => {
+    const value = slots[key];
+    if (value && value.spec) { b.values[key] = value; value.parent = b; value.slot = key; }
+    else b.values[key] = value;
+  });
+  Object.keys(fields || {}).forEach(k => b.fields[k] = fields[k]);
+  return b;
+}
+
+function buildStatement(node, state) {
+  switch (node.kind) {
+    case "raw":
+      return [rawBlock(node.text, state)];
+    case "pass":
+      return node.quiet ? [] : [makeBlock(SPECS.control_pass)];
+    case "break": return [makeBlock(SPECS.control_break)];
+    case "continue": return [makeBlock(SPECS.control_next)];
+    case "import": {
+      const b = makeBlock(SPECS.py_import);
+      b.values.module = node.text.replace(/^import\s+/, "");
+      if (node.text.startsWith("from")) { b.values.module = node.text; }
+      return [b];
+    }
+    case "return":
+      if (!node.value) return [makeBlock(SPECS.func_return_none)];
+      return [put("func_return", { val:buildValue(node.value, state) }, {}, state)];
+    case "raise": {
+      if (node.value && node.value.kind === "call" && node.value.args.length) {
+        return [put("py_raise", { msg:buildValue(node.value.args[0], state) },
+                    {}, state)];
+      }
+      return [rawBlock("raise", state)];
+    }
+    case "assign": {
+      const target = node.target;
+      if (target.kind === "name") {
+        if (project.lists.includes(target.value)) {
+          return [put("list_set_all", { seq:buildValue(node.value, state) },
+                      { list:target.value }, state)];
+        }
+        return [put("var_set", { val:buildValue(node.value, state) },
+                    { var:target.value }, state)];
+      }
+      if (target.kind === "index") {
+        const b = put("py_dict_set", { k:buildValue(target.index, state),
+                                       v:buildValue(node.value, state) }, {}, state);
+        b.values.d = unparse(target.value);
+        return [b];
+      }
+      return [rawBlock(unparse(target) + " = " + unparse(node.value), state)];
+    }
+    case "augassign": {
+      if (node.op === "+" && node.target.kind === "name" &&
+          project.vars.includes(node.target.value)) {
+        return [put("var_change", { val:buildValue(node.value, state) },
+                    { var:node.target.value }, state)];
+      }
+      return [rawBlock(unparse(node.target) + " " + node.op + "= " +
+                       unparse(node.value), state)];
+    }
+    case "if": {
+      const test = buildCondition(node.test, state);
+      if (node.orelse && node.orelse.length) {
+        const b = put("control_if_else", { cond:test }, {}, state);
+        attachBody(b, 0, node.body, state);
+        attachBody(b, 1, node.orelse, state);
+        return [b];
+      }
+      const b = put("control_if", { cond:test }, {}, state);
+      attachBody(b, 0, node.body, state);
+      return [b];
+    }
+    case "while": {
+      if (node.test.kind === "const" && node.test.value === "True") {
+        const b = makeBlock(SPECS.control_forever);
+        attachBody(b, 0, node.body, state);
+        return [b];
+      }
+      const b = put("control_while", { cond:buildCondition(node.test, state) },
+                    {}, state);
+      attachBody(b, 0, node.body, state);
+      return [b];
+    }
+    case "for": return [buildFor(node, state)];
+    case "expr": return buildExpressionStatement(node.value, state);
+    default:
+      return [rawBlock(unparse(node), state)];
+  }
+}
+
+function buildFor(node, state) {
+  const iter = node.iter;
+  const used = usesName(node.body, node.target);
+  if (iter.kind === "call" && nameOf(iter.func) === "range") {
+    const args = iter.args;
+    if (args.length === 1 && !used) {
+      const b = put("control_repeat", { times:buildValue(args[0], state) },
+                    {}, state);
+      attachBody(b, 0, node.body, state);
+      return b;
+    }
+    if (args.length <= 2) {
+      const from = args.length === 2 ? args[0] : { kind:"num", value:"0" };
+      const stop = args.length === 2 ? args[1] : args[0];
+      const b = put("control_count", { a:buildValue(from, state) },
+                    { var:node.target }, state);
+      if (stop.kind === "num") b.values.b = String(Number(stop.value) - 1);
+      else {
+        const minus = put("op_sub", { a:buildValue(stop, state) }, {}, state);
+        minus.values.b = "1";
+        b.values.b = minus; minus.parent = b; minus.slot = "b";
+      }
+      attachBody(b, 0, node.body, state);
+      return b;
+    }
+  }
+  if (iter.kind === "name" && project.lists.includes(iter.value)) {
+    const b = put("control_for_each", {}, { var:node.target, list:iter.value },
+                  state);
+    attachBody(b, 0, node.body, state);
+    return b;
+  }
+  return rawBlock(unparse({ kind:"rawfor", node }), state);
+}
+function usesName(body, name) {
+  let found = false;
+  (function walk(nodes) {
+    nodes.forEach(n => {
+      JSON.stringify(n, (k, v) => {
+        if (v && v.kind === "name" && v.value === name) found = true;
+        return v;
+      });
+      ["body", "orelse"].forEach(k => { if (n[k]) walk(n[k]); });
+    });
+  })(body);
+  return found;
+}
+
+function buildExpressionStatement(value, state) {
+  if (value.kind === "str") {                       /* a bare docstring */
+    const b = makeBlock(SPECS.py_comment);
+    b.values.text = value.value.split("\n")[0].slice(0, 60);
+    return [b];
+  }
+  if (value.kind === "call") {
+    const name = nameOf(value.func);
+    const args = value.args.filter(a => !a.keyword);
+    if (name === "print") {
+      if (!args.length) return [put("text_print", { msg:"" }, {}, state)];
+      if (args.length === 1) {
+        if (args[0].kind === "str" && args[0].fstring) {
+          const b = makeBlock(SPECS.text_fprint);
+          b.values.msg = args[0].value;
+          return [b];
+        }
+        if (args[0].kind === "name" && project.vars.includes(args[0].value)) {
+          return [put("var_show", {}, { var:args[0].value }, state)];
+        }
+        return [put("text_print", { msg:buildValue(args[0], state) }, {}, state)];
+      }
+      if (args.length === 2) {
+        return [put("text_print2", { a:buildValue(args[0], state),
+                                     b:buildValue(args[1], state) }, {}, state)];
+      }
+      if (args.length === 3) {
+        return [put("text_print3", { a:buildValue(args[0], state),
+                                     b:buildValue(args[1], state),
+                                     c:buildValue(args[2], state) }, {}, state)];
+      }
+      if (args.length === 4) {
+        return [put("text_print4", { a:buildValue(args[0], state),
+                                     b:buildValue(args[1], state),
+                                     c:buildValue(args[2], state),
+                                     d:buildValue(args[3], state) }, {}, state)];
+      }
+      /* more than four: join them with spaces, the way print does */
+      return [put("text_print", { msg:joinArgs(args, state) }, {}, state)];
+    }
+    if (name === "time.sleep" && args.length === 1) {
+      return [put("control_wait", { secs:buildValue(args[0], state) }, {}, state)];
+    }
+    if ((name === "sys.exit" || name === "exit" || name === "quit")) {
+      return [makeBlock(SPECS.control_stop)];
+    }
+    if (name === "broadcast" && args.length === 1) {
+      const b = makeBlock(SPECS.event_broadcast);
+      b.values.msg = args[0].kind === "str" ? args[0].value : unparse(args[0]);
+      return [b];
+    }
+    const fn = state.funcs[name];
+    if (fn && !fn.returns) {
+      const b = makeBlock(SPECS["func::" + name]);
+      fn.params.forEach((p, k) => {
+        if (args[k]) setSlot(b, "p" + k, buildValue(args[k], state));
+      });
+      return [b];
+    }
+    /* list methods that have a block of their own */
+    if (value.func.kind === "attr" && value.func.value.kind === "name" &&
+        project.lists.includes(value.func.value.value)) {
+      const list = value.func.value.value, method = value.func.name;
+      if (method === "append" && args.length === 1) {
+        return [put("list_add", { item:buildValue(args[0], state) },
+                    { list }, state)];
+      }
+      if (method === "clear") return [put("list_clear", {}, { list }, state)];
+      if (method === "sort") return [put("list_sort", {}, { list }, state)];
+      if (method === "reverse") return [put("list_reverse", {}, { list }, state)];
+      if (method === "insert" && args.length === 2) {
+        const b = put("list_insert", { item:buildValue(args[1], state) },
+                      { list }, state);
+        setSlot(b, "i", plusOne(args[0], state));
+        return [b];
+      }
+    }
+  }
+  return [rawBlock(unparse(value), state)];
+}
+
+/* ---- expressions ----------------------------------------------------- */
+function setSlot(block, name, value) {
+  if (value && value.spec) { block.values[name] = value; value.parent = block; value.slot = name; }
+  else block.values[name] = value;
+}
+function joinArgs(args, state) {
+  let acc = buildValue(args[0], state);
+  for (let k = 1; k < args.length; k++) {
+    const spaced = put("text_join", { a:acc }, {}, state);
+    spaced.values.b = " ";
+    acc = put("text_join", { a:spaced, b:buildValue(args[k], state) }, {}, state);
+  }
+  return acc;
+}
+function plusOne(node, state) {
+  if (node.kind === "num") return String(Number(node.value) + 1);
+  const b = put("op_add", { a:buildValue(node, state) }, {}, state);
+  b.values.b = "1";
+  return b;
+}
+function buildCondition(node, state) {
+  const value = buildValue(node, state);
+  if (value && value.spec) return value;
+  const b = makeBlock(SPECS.py_expr);
+  b.values.code = unparse(node);
+  state.report.raw++;
+  return b;
+}
+function rawValue(node, state) {
+  state.report.raw++;
+  const b = makeBlock(SPECS.py_expr);
+  b.values.code = unparse(node);
+  return b;
+}
+function buildValue(node, state) {
+  switch (node.kind) {
+    case "num": return node.value;
+    case "str":
+      if (node.fstring) {
+        const b = makeBlock(SPECS.text_sentence);
+        b.values.t = node.value;
+        return b;
+      }
+      return unescapePy(node.value);
+    case "const":
+      if (node.value === "True") return makeBlock(SPECS.op_true);
+      if (node.value === "False") return makeBlock(SPECS.op_false);
+      return makeBlock(SPECS.py_none);
+    case "name": {
+      if (state.params.includes(node.value)) {
+        const spec = SPECS["param::" + currentFunction(state) + "::" + node.value];
+        if (spec) return makeBlock(spec);
+      }
+      if (project.lists.includes(node.value)) return makeBlock(listSpec(node.value));
+      if (project.vars.includes(node.value)) return makeBlock(varSpec(node.value));
+      return rawValue(node, state);
+    }
+    case "binop": {
+      const id = BIN_BLOCK[node.op];
+      if (!id) return rawValue(node, state);
+      /* "hello " + name is joining text, not adding numbers */
+      if (node.op === "+" && (isTextish(node.left) || isTextish(node.right))) {
+        return put("text_join", { a:buildValue(node.left, state),
+                                  b:buildValue(node.right, state) }, {}, state);
+      }
+      return put(id, { a:buildValue(node.left, state),
+                       b:buildValue(node.right, state) }, {}, state);
+    }
+    case "neg": {
+      if (node.value.kind === "num") return "-" + node.value.value;
+      const b = put("op_sub", { b:buildValue(node.value, state) }, {}, state);
+      b.values.a = "0";
+      return b;
+    }
+    case "not": return put("op_not", { a:buildValue(node.value, state) }, {}, state);
+    case "bool":
+      return put(node.op === "and" ? "op_and" : "op_or",
+                 { a:buildValue(node.left, state),
+                   b:buildValue(node.right, state) }, {}, state);
+    case "compare":
+      return put("op_compare", { a:buildValue(node.left, state),
+                                 b:buildValue(node.right, state) },
+                 { op:node.op }, state);
+    case "in": {
+      if (node.right.kind === "name" && project.lists.includes(node.right.value)) {
+        return put("list_contains", { item:buildValue(node.left, state) },
+                   { list:node.right.value }, state);
+      }
+      return put("text_contains", { s:buildValue(node.right, state),
+                                    sub:buildValue(node.left, state) }, {}, state);
+    }
+    case "list":
+      if (!node.items.length) return makeBlock(SPECS.list_new);
+      return rawValue(node, state);
+    case "dict":
+      if (!node.pairs.length) return makeBlock(SPECS.py_dict_new);
+      return rawValue(node, state);
+    case "index": {
+      if (node.value.kind === "name" && project.lists.includes(node.value.value)) {
+        if (node.index.kind === "neg" && node.index.value.kind === "num" &&
+            node.index.value.value === "1") {
+          return put("list_last", {}, { list:node.value.value }, state);
+        }
+        const b = put("list_item", {}, { list:node.value.value }, state);
+        setSlot(b, "i", plusOne(node.index, state));
+        return b;
+      }
+      return rawValue(node, state);
+    }
+    case "call": return buildCall(node, state);
+    default: return rawValue(node, state);
+  }
+}
+function currentFunction(state) {
+  return Object.keys(state.funcs).find(
+    name => state.funcs[name].params === state.params) ||
+    Object.keys(state.funcs).find(
+      name => JSON.stringify(state.funcs[name].params) ===
+              JSON.stringify(state.params)) || "";
+}
+function buildCall(node, state) {
+  const name = nameOf(node.func);
+  const args = node.args.filter(a => !a.keyword);
+  const one = (id, slots) => put(id, slots, {}, state);
+
+  if (name === "len" && args.length === 1) {
+    if (args[0].kind === "name" && project.lists.includes(args[0].value)) {
+      return put("list_length", {}, { list:args[0].value }, state);
+    }
+    return one("text_length", { s:buildValue(args[0], state) });
+  }
+  if (name === "input") {
+    const b = makeBlock(SPECS.text_ask);
+    if (args.length) setSlot(b, "prompt", buildValue(args[0], state));
+    else b.values.prompt = "";
+    return b;
+  }
+  if (["int", "float", "str", "bool"].includes(name) && args.length === 1) {
+    return put("op_convert", { v:buildValue(args[0], state) }, { t:name }, state);
+  }
+  if (name === "round") {
+    if (args.length === 1) return one("op_round", { a:buildValue(args[0], state) });
+    if (args.length === 2) {
+      return one("op_round_to", { a:buildValue(args[0], state),
+                                  n:buildValue(args[1], state) });
+    }
+  }
+  if (name === "abs" && args.length === 1) {
+    return put("op_math", { a:buildValue(args[0], state) }, { fn:"abs" }, state);
+  }
+  if (MATH_CALL[name] && args.length === 1) {
+    return put("op_math", { a:buildValue(args[0], state) },
+               { fn:MATH_CALL[name] }, state);
+  }
+  if (name === "math.pi") return makeBlock(SPECS.op_pi);
+  if (["min", "max"].includes(name) && args.length === 2) {
+    return put("op_min_max", { a:buildValue(args[0], state),
+                               b:buildValue(args[1], state) },
+               { fn:name }, state);
+  }
+  if (name === "random.randint" && args.length === 2) {
+    return one("op_random", { a:buildValue(args[0], state),
+                              b:buildValue(args[1], state) });
+  }
+  if (name === "random.random") return makeBlock(SPECS.op_random_decimal);
+  if (["sum", "max", "min"].includes(name) && args.length === 1 &&
+      args[0].kind === "name" && project.lists.includes(args[0].value)) {
+    return put("list_maths", {}, { fn:name, list:args[0].value }, state);
+  }
+  if (name === "list" && args.length === 1 && args[0].kind === "name" &&
+      project.lists.includes(args[0].value)) {
+    return put("list_copy", {}, { list:args[0].value }, state);
+  }
+  /* text methods */
+  if (node.func.kind === "attr") {
+    const target = node.func.value, method = node.func.name;
+    if (method === "upper" || method === "lower" || method === "title") {
+      return put("text_case", { s:buildValue(target, state) },
+                 { case:method }, state);
+    }
+    if (method === "strip" && !args.length) {
+      return one("text_strip", { s:buildValue(target, state) });
+    }
+    if (method === "replace" && args.length === 2) {
+      return one("text_replace", { s:buildValue(target, state),
+                                   x:buildValue(args[0], state),
+                                   y:buildValue(args[1], state) });
+    }
+    if (method === "split" && args.length === 1) {
+      return one("text_split", { s:buildValue(target, state),
+                                 sep:buildValue(args[0], state) });
+    }
+    if (method === "startswith" && args.length === 1) {
+      return one("text_starts", { s:buildValue(target, state),
+                                  sub:buildValue(args[0], state) });
+    }
+    if (method === "join" && args.length === 1 && args[0].kind === "name" &&
+        project.lists.includes(args[0].value)) {
+      return put("list_join", { sep:buildValue(target, state) },
+                 { list:args[0].value }, state);
+    }
+    if (method === "index" && args.length === 1 && target.kind === "name" &&
+        project.lists.includes(target.value)) {
+      return put("list_index", { item:buildValue(args[0], state) },
+                 { list:target.value }, state);
+    }
+  }
+  const fn = state.funcs[name];
+  if (fn && fn.returns && SPECS["func::" + name]) {
+    const b = makeBlock(SPECS["func::" + name]);
+    fn.params.forEach((p, k) => {
+      if (args[k]) setSlot(b, "p" + k, buildValue(args[k], state));
+    });
+    return b;
+  }
+  return rawValue(node, state);
+}
+
+/* a "value of" block can still work out plain literals like [1, 2, 3] */
+function literalValue(code) {
+  try {
+    const tree = parsePython(String(code));
+    if (tree.length === 1 && tree[0].kind === "expr") {
+      return evalLiteral(tree[0].value);
+    }
+  } catch (err) { /* not a literal, fall through */ }
+  return "?";
+}
+function evalLiteral(node) {
+  switch (node.kind) {
+    case "num": return Number(node.value);
+    case "str": return unescapePy(node.value);
+    case "const":
+      return node.value === "True" ? true : (node.value === "False" ? false : null);
+    case "neg": return -evalLiteral(node.value);
+    case "list": return node.items.map(evalLiteral);
+    case "dict": {
+      const out = {};
+      node.pairs.forEach(p => { out[evalLiteral(p[0])] = evalLiteral(p[1]); });
+      return out;
+    }
+    default: throw new Error("not a literal");
+  }
+}
+
+/* ---- turning a node back into Python, for the bits we keep raw ------- */
+function unparse(node) {
+  if (!node) return "None";
+  switch (node.kind) {
+    case "raw": return node.text;
+    case "num": return node.value;
+    case "str": return (node.fstring ? "f" : "") + '"' + node.value + '"';
+    case "const": return node.value;
+    case "name": return node.value;
+    case "attr": return unparse(node.value) + "." + node.name;
+    case "call":
+      return unparse(node.func) + "(" +
+             node.args.map(a => unparse(a.keyword ? a.value : a)).join(", ") + ")";
+    case "binop": return "(" + unparse(node.left) + " " + node.op + " " +
+                          unparse(node.right) + ")";
+    case "compare": return "(" + unparse(node.left) + " " + node.op + " " +
+                            unparse(node.right) + ")";
+    case "bool": return "(" + unparse(node.left) + " " + node.op + " " +
+                         unparse(node.right) + ")";
+    case "not": return "(not " + unparse(node.value) + ")";
+    case "neg": return "-" + unparse(node.value);
+    case "in": return "(" + unparse(node.left) + " in " + unparse(node.right) + ")";
+    case "list": return "[" + node.items.map(unparse).join(", ") + "]";
+    case "dict": return "{" + node.pairs.map(p => unparse(p[0]) + ": " +
+                          unparse(p[1])).join(", ") + "}";
+    case "index": return unparse(node.value) + "[" + unparse(node.index) + "]";
+    case "slice": return unparse(node.value) + "[" +
+                         (node.from ? unparse(node.from) : "") + ":" +
+                         (node.to ? unparse(node.to) : "") + "]";
+    case "rawfor": {
+      const n = node.node;
+      return "for " + n.target + " in " + unparse(n.iter) + ": ...";
+    }
+    default: return "None";
+  }
+}
+function unescapePy(text) {
+  return String(text).replace(/\\n/g, "\n").replace(/\\t/g, "\t")
+                     .replace(/\\"/g, '"').replace(/\\'/g, "'")
+                     .replace(/\\\\/g, "\\");
 }
 
 /* ===================================================================== */
@@ -1028,13 +2807,30 @@ function paletteItems() {
   const items = [];
   ORDER.forEach(cat => {
     items.push({ kind:"section", cat });
+    if (cat === "events") {
+      items.push({ kind:"note",
+                   text:"Snap blocks under this, then press Run." });
+    }
     if (cat === "variables") {
       items.push({ kind:"button", label:"Make a variable", action:makeVariable });
       project.vars.forEach(v => items.push({ kind:"block", id:"var::" + v }));
     }
-    if (cat === "events") {
-      items.push({ kind:"note",
-                   text:"Snap blocks under this, then press Run." });
+    if (cat === "lists") {
+      items.push({ kind:"button", label:"Make a list", action:makeList });
+      project.lists.forEach(v => items.push({ kind:"block", id:"list::" + v }));
+    }
+    if (cat === "functions") {
+      items.push({ kind:"button", label:"Import a .py file", action:openImport });
+      if (!project.funcs.length) {
+        items.push({ kind:"note", text:"Custom blocks appear here when you " +
+                                       "import a file with def in it." });
+      }
+      project.funcs.forEach(fn => {
+        items.push({ kind:"block", id:"func::" + fn.name + "::def" });
+        items.push({ kind:"block", id:"func::" + fn.name });
+        fn.params.forEach(p =>
+          items.push({ kind:"block", id:"param::" + fn.name + "::" + p }));
+      });
     }
     PALETTE[cat].forEach(id => items.push({ kind:"block", id }));
   });
@@ -1423,6 +3219,79 @@ function makeVariable() {
   buildPalette();
   say('Variable "' + name + '" is ready.');
 }
+function makeList() {
+  const name = (prompt("Name for the new list:") || "").trim();
+  if (!name) return;
+  if (!project.lists.includes(name)) {
+    project.lists.push(name);
+    listSpec(name);
+  }
+  buildPalette();
+  say('List "' + name + '" is ready.');
+}
+
+/* ---- turning a Python file into blocks -------------------------------- */
+function openImport() {
+  const box = document.getElementById("importer");
+  document.getElementById("import-text").value = "";
+  document.getElementById("import-note").textContent = "";
+  box.style.display = "flex";
+  document.getElementById("import-text").focus();
+}
+function closeImport() {
+  document.getElementById("importer").style.display = "none";
+}
+function doImport(source, label) {
+  if (!source.trim()) { closeImport(); return; }
+  let result;
+  try { result = importPython(source); }
+  catch (err) {
+    document.getElementById("import-note").textContent =
+      String(err && err.message ? err.message : err);
+    return;
+  }
+  project.scripts = result.scripts;
+  closeImport();
+  buildPalette();
+  drawScripts();
+  showPane("code");
+  const r = result.report;
+  say((label ? label + ": " : "") + r.blocks + " blocks made" +
+      (r.raw ? ", " + r.raw + " kept as plain Python" : "") + ".");
+  document.getElementById("out").textContent = "";
+  printOut("--- imported " + (label || "your Python") + " ---", "sys");
+  printOut(r.blocks + " blocks made, " + r.raw + " kept word for word.");
+  if (project.funcs.length) {
+    printOut("Custom blocks: " +
+             project.funcs.map(f => f.name).join(", "), "sys");
+  }
+}
+document.getElementById("import-go").addEventListener("click", () =>
+  doImport(document.getElementById("import-text").value, "pasted Python"));
+document.getElementById("import-cancel").addEventListener("click", closeImport);
+document.getElementById("import-file").addEventListener("change", ev => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => doImport(String(reader.result), file.name);
+  reader.readAsText(file);
+  ev.target.value = "";
+});
+document.getElementById("importer").addEventListener("click", ev => {
+  if (ev.target.id === "importer") closeImport();
+});
+document.getElementById("import-btn").addEventListener("click", openImport);
+/* dropping a .py file anywhere on the page brings it in */
+window.addEventListener("dragover", ev => ev.preventDefault());
+window.addEventListener("drop", ev => {
+  ev.preventDefault();
+  const file = ev.dataTransfer && ev.dataTransfer.files &&
+               ev.dataTransfer.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => doImport(String(reader.result), file.name);
+  reader.readAsText(file);
+});
 
 /* ---- click a loose block to try it ----------------------------------- */
 function clickBlock(block) {

@@ -33,10 +33,11 @@ python scratchpy_studio.py
 
 ### 👉 [Try the browser demo](https://zdstudios.github.io/scratchpy-studio/) — no install, nothing to download
 
-[`index.html`](index.html) is a small standalone version of the same idea: one
-file, no dependencies, no build step. Drag blocks, watch the Python appear, press
-Run and it executes right there in the page. It is a taste of the real thing —
-the desktop app has 148 blocks, pip, file handling and the rest.
+[`index.html`](index.html) is a standalone version of the same idea: one file, no
+dependencies, no build step. 95 blocks, drag and snap, the Python appearing live
+beside you, Run working right there in the page — and you can **drop a `.py` file
+on it** and watch the whole program turn into blocks. The desktop app adds pip,
+virtual environments, files, the web blocks and the MCP server.
 
 ---
 
@@ -346,23 +347,42 @@ finally runs the generated example program and checks its output.
 double-clicking it, or visit at
 **[zdstudios.github.io/scratchpy-studio](https://zdstudios.github.io/scratchpy-studio/)**.
 
-It shares the desktop app's ideas in about 1,600 lines of HTML, CSS and
+It shares the desktop app's ideas in about 3,400 lines of HTML, CSS and
 JavaScript with **no dependencies and no build step**:
 
-* the same Scratch 3 shapes, drawn as SVG paths from the same puzzle geometry
+* **95 blocks** across eight categories — the same Scratch 3 shapes, drawn as SVG
+  paths from the same puzzle geometry
 * one continuous drawer that glides between sections
 * drag, snap, C-shaped mouths, reporters that drop into slots
 * the Python it makes, updating live beside you — copy it or save it as a `.py`
 * a small interpreter so **Run** actually works in the page, and clicking a loose
   block still shows its answer in a bubble
+* **it reads Python too** — see below
 
 Each block is described once, and that single description drives all three
 things: how it is drawn, the Python it generates, and how it runs. It works with
 a mouse, a pen or a finger.
 
-The demo keeps 26 blocks across five categories. Everything else — the other
-120 blocks, pip, the venv, files, the web blocks, the Python importer, the MCP
-server — lives in the desktop app.
+### Import a Python file, in the browser
+
+Press **Import .py**, paste a program, or just drop a `.py` file onto the page.
+A small tokeniser and recursive-descent parser — written from scratch in
+JavaScript, since browsers have no `ast` module — reads the file and builds the
+blocks.
+
+It understands assignments, `if`/`elif`/`else`, `while`, `for` over `range` and
+over lists, `def` with parameters and returns, `break`, `continue`, f-strings,
+comparisons, `and`/`or`/`not`, list and string methods, and the usual built-ins.
+Functions become real **custom blocks** with their own define hat and call block.
+Anything it does not recognise is kept word for word in a "python" block, so no
+file is ever refused.
+
+> Six programs were tested three ways: run by real Python, imported into blocks
+> and run by the demo's own interpreter, then turned back into Python and run
+> again. All three produce **identical output** every time.
+
+What the demo leaves out: pip, virtual environments, files, the web blocks and
+the MCP server. Those need a machine, not a tab — they are in the desktop app.
 
 ---
 
