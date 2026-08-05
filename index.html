@@ -2967,11 +2967,26 @@ function onDown(ev) {
   hideMenu(); commitEditor();
   const target = ev.target.closest("[data-menu],[data-slot],[data-block]");
   if (!target) return;
-  if (target.dataset.menu) { openMenu(target.dataset.menu, ev); return; }
-  if (target.dataset.slot) { openEditor(target.dataset.slot); return; }
-
   const fromPalette = palette.contains(target);
-  const id = target.dataset.block;
+
+  /* Typing in a slot only makes sense on the canvas. preventDefault matters:
+     without it the browser moves focus away the moment we hand it to the
+     input, and the box shuts again before a key can be pressed. */
+  if (!fromPalette && target.dataset.menu) {
+    ev.preventDefault();
+    openMenu(target.dataset.menu, ev);
+    return;
+  }
+  if (!fromPalette && target.dataset.slot) {
+    ev.preventDefault();
+    openEditor(target.dataset.slot);
+    return;
+  }
+
+  /* a click on a value inside a drawer block still drags the block out */
+  const holder = target.closest("[data-block]");
+  if (!holder) return;
+  const id = holder.dataset.block;
   let block = fromPalette
     ? Object.values(protos).find(p => subtree(p).some(b => b.id === id))
     : findBlock(id);
@@ -3143,13 +3158,15 @@ function openEditor(key) {
   const block = findBlock(id);
   const slot = L.slot[key];
   if (!block || !slot) return;
-  const box = stage.getBoundingClientRect();
-  const cbox = canvas.getBoundingClientRect();
   editing = { block, name };
   editor.value = String(block.values[name] === undefined ? "" : block.values[name]);
   editor.style.display = "block";
-  editor.style.left = (cbox.left - box.left + slot.x - 1) + "px";
-  editor.style.top = (cbox.top - box.top + slot.y - 1) + "px";
+  /* The canvas is the only thing in the stage's flow, so its top left is the
+     stage's content origin - which is also where an absolutely positioned box
+     is measured from. Slot coordinates can therefore be used as they are, and
+     they stay right however far the workspace is scrolled. */
+  editor.style.left = (slot.x - 1) + "px";
+  editor.style.top = (slot.y - 1) + "px";
   editor.style.width = Math.max(slot.w, 54) + "px";
   editor.style.height = slot.h + "px";
   editor.style.borderColor = CATS[block.spec.cat].dark;
