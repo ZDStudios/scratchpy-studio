@@ -155,6 +155,28 @@ No Python at all? Take one from the
 Each build carries its own Python, so your block programs run even on a machine
 that has none. (Installing packages with pip still wants a normal Python.)
 
+### Which version am I running?
+
+The version sits next to the name in the purple bar, and **Settings → About this
+copy** shows the exact file it is running from, when that file was last changed,
+and a **Check for updates** button that asks GitHub. From a terminal:
+
+```bash
+python scratchpy_studio.py --version
+```
+
+```
+ScratchPy Studio 1.0.2
+Running from the source file:
+  C:\...\scratchpy_studio.py
+  last changed 05 Aug 2026, 12:23
+Python 3.14.6, Tk 8.6, Windows 11
+125 blocks loaded
+```
+
+Handy when you have both a checkout and a downloaded app on the same machine and
+want to know which one you just opened.
+
 ### Other switches
 
 ```bash

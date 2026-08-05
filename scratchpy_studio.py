@@ -48,9 +48,14 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 APP_NAME = "ScratchPy Studio"
-APP_VERSION = "1.0"
+APP_VERSION = "1.0.2"
 PROJECT_EXT = ".spy"
 IS_WINDOWS = sys.platform.startswith("win")
+
+REPO_URL = "https://github.com/ZDStudios/scratchpy-studio"
+RELEASES_URL = REPO_URL + "/releases/latest"
+RELEASES_API = ("https://api.github.com/repos/ZDStudios/scratchpy-studio"
+                "/releases/latest")
 
 # --------------------------------------------------------------------------- #
 #  Palette of colours - lifted from the Scratch 3 design language
@@ -3781,6 +3786,65 @@ PACK_DIR = os.path.join(APP_DIR, "scratchpy_blocks")
 ASSET_DIR = os.path.join(APP_DIR, "scratchpy_assets")
 
 
+def running_from() -> str:
+    """The exact file this copy of ScratchPy is running out of."""
+    if FROZEN:
+        return sys.executable
+    try:
+        return os.path.abspath(__file__)
+    except NameError:                                    # pragma: no cover
+        return "unknown"
+
+
+def build_kind() -> str:
+    return "bundled app" if FROZEN else "source file"
+
+
+def build_stamp() -> str:
+    """When the running copy was last changed - catches a stale build."""
+    try:
+        when = time.localtime(os.path.getmtime(running_from()))
+        return time.strftime("%d %b %Y, %H:%M", when)
+    except Exception:
+        return "unknown"
+
+
+def build_summary() -> str:
+    return "\n".join([
+        "%s %s" % (APP_NAME, APP_VERSION),
+        "Running from the %s:" % build_kind(),
+        "  %s" % running_from(),
+        "  last changed %s" % build_stamp(),
+        "Python %s, Tk %s, %s %s" % (platform.python_version(),
+                                     tk.TkVersion, platform.system(),
+                                     platform.release()),
+        "%d blocks loaded" % len(SPECS),
+    ])
+
+
+def version_tuple(text: str) -> tuple:
+    parts = []
+    for chunk in str(text).lstrip("vV").split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts + [0, 0, 0])[:3]
+
+
+def latest_release(timeout: float = 12.0) -> Tuple[str, str]:
+    """Ask GitHub for the newest published version. Returns (tag, error)."""
+    import urllib.request
+    request = urllib.request.Request(
+        RELEASES_API,
+        headers={"User-Agent": "ScratchPyStudio/" + APP_VERSION,
+                 "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as reply:
+            data = json.loads(reply.read().decode("utf-8", "replace"))
+        return str(data.get("tag_name") or ""), ""
+    except Exception as exc:
+        return "", "%s: %s" % (type(exc).__name__, exc)
+
+
 def find_python() -> str:
     """The interpreter used to run your programs and to drive pip.
 
@@ -5158,6 +5222,11 @@ class App:
                             outline="")
         tk.Label(bar, text=APP_NAME, bg=UI["topbar"], fg="#FFFFFF",
                  font=(FONT_FAMILY, 13, "bold")).pack(side="left")
+        version = tk.Label(bar, text=" v" + APP_VERSION, bg=UI["topbar"],
+                           fg="#C9B6FF", font=(FONT_FAMILY, 9),
+                           cursor="hand2")
+        version.pack(side="left", padx=(4, 0))
+        version.bind("<Button-1>", lambda e: self.open_settings())
         self.title_var = tk.StringVar(value="Untitled")
         tk.Label(bar, textvariable=self.title_var, bg=UI["topbar"],
                  fg="#E4D9FF", font=(FONT_FAMILY, 10)).pack(side="left",
@@ -6157,10 +6226,11 @@ class App:
     def about(self):
         messagebox.showinfo(
             "About " + APP_NAME,
-            "%s %s\n\nA Scratch style editor that writes real Python.\n"
+            "A Scratch style editor that writes real Python.\n"
             "Everything lives in one file, using nothing but the\n"
-            "Python standard library.\n\nRunning on Python %s" %
-            (APP_NAME, APP_VERSION, platform.python_version()))
+            "Python standard library.\n\n"
+            + build_summary() + "\n\n" + REPO_URL +
+            "\n\nSettings has a 'Check for updates' button.")
 
     def on_close(self):
         self.workspace.close_editor(True)
@@ -6344,6 +6414,56 @@ class SettingsDialog:
                        activebackground=UI["panel"], bd=0, highlightthickness=0,
                        font=(FONT_FAMILY, 10)).pack(anchor="w", padx=10)
 
+        box3 = tk.LabelFrame(top, text=" About this copy ", bg=UI["panel"],
+                             fg=UI["text"], bd=1, relief="solid",
+                             font=(FONT_FAMILY, 9, "bold"), labelanchor="nw")
+        box3.pack(fill="x", padx=24, pady=6, ipady=6)
+
+        head = tk.Frame(box3, bg=UI["panel"])
+        head.pack(fill="x", padx=10, pady=(6, 0))
+        tk.Label(head, text="%s %s" % (APP_NAME, APP_VERSION), bg=UI["panel"],
+                 fg=UI["accent"],
+                 font=(FONT_FAMILY, 11, "bold")).pack(side="left")
+        tk.Label(head, text="   (%s)" % build_kind(), bg=UI["panel"],
+                 fg="#8A93A5", font=(FONT_FAMILY, 9)).pack(side="left")
+
+        tk.Label(box3, text=running_from(), bg=UI["panel"], fg=UI["text"],
+                 font=(MONO_FAMILY, 8), anchor="w", justify="left",
+                 wraplength=430).pack(anchor="w", padx=10, pady=(2, 0))
+        tk.Label(box3,
+                 text="last changed %s        Python %s, Tk %s, %s %s"
+                      % (build_stamp(), platform.python_version(),
+                         tk.TkVersion, platform.system(), platform.release()),
+                 bg=UI["panel"], fg="#8A93A5", font=(FONT_FAMILY, 8),
+                 anchor="w").pack(anchor="w", padx=10)
+        tk.Label(box3, text="%d blocks loaded" % len(SPECS), bg=UI["panel"],
+                 fg="#8A93A5", font=(FONT_FAMILY, 8),
+                 anchor="w").pack(anchor="w", padx=10)
+
+        row3 = tk.Frame(box3, bg=UI["panel"])
+        row3.pack(fill="x", padx=10, pady=(8, 2))
+        self.update_btn = tk.Button(row3, text="Check for updates",
+                                    command=self.check_updates, relief="flat",
+                                    bd=0, bg=UI["accent"], fg="#FFFFFF",
+                                    activebackground="#3373CC",
+                                    activeforeground="#FFFFFF",
+                                    font=(FONT_FAMILY, 9, "bold"),
+                                    cursor="hand2", padx=12, pady=3)
+        self.update_btn.pack(side="left")
+        tk.Button(row3, text="Copy these details", command=self.copy_details,
+                  relief="flat", bd=0, bg="#EEF1F6", fg=UI["text"],
+                  font=(FONT_FAMILY, 8), cursor="hand2",
+                  padx=8).pack(side="left", padx=6)
+        tk.Button(row3, text="Open the project page", command=self.open_repo,
+                  relief="flat", bd=0, bg="#EEF1F6", fg=UI["text"],
+                  font=(FONT_FAMILY, 8), cursor="hand2",
+                  padx=8).pack(side="left")
+        self.update_state = tk.Label(box3, text="", bg=UI["panel"],
+                                     fg="#8A93A5", font=(FONT_FAMILY, 8),
+                                     anchor="w", justify="left",
+                                     wraplength=430)
+        self.update_state.pack(anchor="w", padx=10, pady=(2, 0))
+
         buttons = tk.Frame(top, bg=UI["panel"])
         buttons.pack(pady=(10, 18))
         tk.Button(buttons, text="Cancel", command=top.destroy, relief="flat",
@@ -6385,6 +6505,71 @@ class SettingsDialog:
         self.state.configure(text=text)
         self.make_btn.configure(text="Repair the venv" if exists
                                 else "Create the venv now")
+
+    # -- about this copy ---------------------------------------------------- #
+
+    def copy_details(self):
+        self.top.clipboard_clear()
+        self.top.clipboard_append(build_summary())
+        self.update_state.configure(text="Copied. Paste it into a bug report.")
+
+    def open_repo(self):
+        import webbrowser
+        try:
+            webbrowser.open(REPO_URL)
+        except Exception:
+            self.update_state.configure(text=REPO_URL)
+
+    def check_updates(self):
+        """Ask GitHub what the newest release is. Only ever when asked."""
+        self.update_btn.configure(state="disabled", text="Checking...")
+        self.update_state.configure(text="Asking github.com...")
+
+        def worker():
+            tag, error = latest_release()
+            self.app.ui(lambda: self.show_update(tag, error))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show_update(self, tag: str, error: str):
+        try:
+            self.update_btn.configure(state="normal", text="Check for updates")
+        except Exception:
+            return                      # the dialog was closed while we waited
+        if error:
+            self.update_state.configure(
+                fg="#B36B00",
+                text="Could not reach github.com (%s). You can look at\n%s"
+                     % (error.split(":")[0], RELEASES_URL))
+            return
+        newest = version_tuple(tag)
+        mine = version_tuple(APP_VERSION)
+        if newest > mine:
+            self.update_state.configure(
+                fg="#B36B00",
+                text="Version %s is out. You have %s.\nDownload it from %s"
+                     % (tag.lstrip("vV"), APP_VERSION, RELEASES_URL))
+            if messagebox.askyesno(
+                    "Update available",
+                    "ScratchPy Studio %s is available and you have %s.\n\n"
+                    "Open the download page?" % (tag.lstrip("vV"), APP_VERSION),
+                    parent=self.top):
+                self.open_repo_releases()
+        elif newest < mine:
+            self.update_state.configure(
+                fg="#8A93A5",
+                text="You are running %s, which is newer than the published "
+                     "%s." % (APP_VERSION, tag.lstrip("vV")))
+        else:
+            self.update_state.configure(
+                fg="#2E9E5B",
+                text="Up to date. %s is the newest version." % APP_VERSION)
+
+    def open_repo_releases(self):
+        import webbrowser
+        try:
+            webbrowser.open(RELEASES_URL)
+        except Exception:
+            pass
 
     def browse(self):
         chosen = filedialog.askdirectory(title="Where should the venv live?",
@@ -7682,6 +7867,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if target and target.startswith("-"):
             target = None
         return MCPServer(target).serve()
+    if "--version" in args or "-V" in args:
+        print(build_summary())
+        return 0
     if "--selftest" in args:
         return selftest()
     if "--make-icons" in args:
