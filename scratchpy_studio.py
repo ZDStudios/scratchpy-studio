@@ -36,6 +36,7 @@ import platform
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -3997,19 +3998,29 @@ class WorkspaceView(ttk.Frame):
         label = describe_block(piece)
 
         def worker():
-            kw = dict(capture_output=True, text=True, encoding="utf-8",
-                      errors="replace", cwd=folder, timeout=PIECE_TIMEOUT,
-                      input="")
-            if IS_WINDOWS:
-                kw["creationflags"] = NO_WINDOW
+            kw = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                      stdin=subprocess.PIPE, text=True, encoding="utf-8",
+                      errors="replace", cwd=folder)
+            kw.update(spawn_kwargs())
             try:
-                res = subprocess.run(command, **kw)
-                out, err, code = res.stdout, res.stderr, res.returncode
-            except subprocess.TimeoutExpired as slow:
-                out = (slow.stdout or "")
-                if isinstance(out, bytes):
-                    out = out.decode("utf-8", "replace")
-                err, code = "", -9
+                proc = subprocess.Popen(command, **kw)
+            except Exception as exc:
+                self.app.ui(lambda: self.piece_done(anchor, label, "",
+                                                    str(exc), -1))
+                return
+            try:
+                out, err = proc.communicate(input="", timeout=PIECE_TIMEOUT)
+                code = proc.returncode
+            except subprocess.TimeoutExpired:
+                # a block that is still speaking or playing has children of
+                # its own, so the whole tree has to go - otherwise the voice
+                # carries on after we have said we stopped it
+                kill_tree(proc)
+                try:
+                    out, err = proc.communicate(timeout=5)
+                except Exception:
+                    out, err = "", ""
+                code = -9
             except Exception as exc:
                 out, err, code = "", str(exc), -1
             self.app.ui(lambda: self.piece_done(anchor, label, out, err, code))
@@ -5217,6 +5228,40 @@ def venv_folder_for(settings: Settings, project_folder: str) -> str:
 NO_WINDOW = 0x08000000 if IS_WINDOWS else 0
 
 
+def spawn_kwargs() -> dict:
+    """Start a program so that it can be stopped along with its children.
+
+    A block that speaks or plays a sound starts a helper of its own, and
+    stopping only the Python process would leave the voice talking.
+    """
+    if IS_WINDOWS:
+        return {"creationflags": NO_WINDOW}
+    return {"start_new_session": True}
+
+
+def kill_tree(proc):
+    """Stop a running program, and anything it started."""
+    if proc is None or proc.poll() is not None:
+        return
+    if IS_WINDOWS:
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, creationflags=NO_WINDOW)
+            return
+        except Exception:
+            pass
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            return
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
 def popen_kwargs() -> dict:
     kw = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
               stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
@@ -6017,8 +6062,7 @@ class Runner:
         kw = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                   stdin=subprocess.PIPE, text=True, encoding="utf-8",
                   errors="replace", bufsize=1, cwd=cwd)
-        if IS_WINDOWS:
-            kw["creationflags"] = NO_WINDOW
+        kw.update(spawn_kwargs())
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
@@ -6070,19 +6114,8 @@ class Runner:
     def stop(self):
         if not self.running:
             return
-        try:
-            if IS_WINDOWS:
-                subprocess.run(["taskkill", "/F", "/T", "/PID",
-                                str(self.proc.pid)],
-                               capture_output=True,
-                               creationflags=NO_WINDOW)
-            else:
-                self.proc.terminate()
-        except Exception:
-            try:
-                self.proc.kill()
-            except Exception:
-                pass
+        # the whole tree, so a voice or a sound it started stops as well
+        kill_tree(self.proc)
         self.q.put(("sys", "--- stopped ---"))
 
 
