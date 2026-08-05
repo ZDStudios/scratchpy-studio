@@ -2753,7 +2753,12 @@ class Renderer:
 #  SECTION 8 - the workspace: drag, drop, snap, edit
 # =========================================================================== #
 
-SNAP_DIST = 46.0
+# How near a block has to be before it snaps. Wide and short: being off to the
+# side is fine, being at the wrong height is not.
+SNAP_X = 115.0        # sideways slack for stacking
+SNAP_Y = 46.0         # vertical slack for stacking
+SNAP_SLOT_X = 30.0    # slack around an input slot
+SNAP_SLOT_Y = 24.0
 
 
 class WorkspaceView(ttk.Frame):
@@ -3040,16 +3045,21 @@ class WorkspaceView(ttk.Frame):
         self.show_hint(self.best_target(b))
 
     def finish_drag(self, xr: float, yr: float):
-        d, self.drag = self.drag, None
-        self.canvas.delete("snaphint")
+        d = self.drag
+        if d is None:
+            return
         b = d["block"]
+        # work out where it lands before letting go of the drag state, because
+        # best_target needs it
+        target = self.best_target(b)
+        self.drag = None
+        self.canvas.delete("snaphint")
         if self.app.over_palette(xr, yr):
             self.file.remove_script(b)
             self.refresh()
             self.app.on_change()
             self.app.status("Block deleted.")
             return
-        target = self.best_target(b)
         if target:
             self.apply_target(b, target)
         self.refresh()
@@ -3120,28 +3130,39 @@ class WorkspaceView(ttk.Frame):
         return total
 
     def best_target(self, dragged: Block) -> Optional[dict]:
+        """The connection a block would make if it were dropped right now.
+
+        Scratch is generous about this: you can be well off to the side and it
+        still snaps, as long as you are at roughly the right height.  So the
+        catching area is a wide, short rectangle rather than a tight circle.
+        """
         if not self.drag:
             return None
-        best, best_d = None, SNAP_DIST * self.renderer.scale
-        size = self.L.size.get(dragged.id, {"w": 40, "h": 40})
+        z = self.renderer.scale
+        size = self.L.size.get(dragged.id, {"w": 40.0, "h": 40.0})
+        tail = self.chain_height(dragged)
+        best, best_score = None, None
         for t in self.drag["targets"]:
+            score = None
             if t["kind"] == "slot":
-                tx = t["x"] + t["w"] / 2.0
-                ty = t["y"] + t["h"] / 2.0
-                bx = dragged.x + min(size["w"], t["w"]) / 2.0
-                by = dragged.y + size["h"] / 2.0
-                d = math.hypot(tx - bx, ty - by)
-                limit = max(30.0, t["h"]) * self.renderer.scale
-            elif t["kind"] == "before":
-                bx = dragged.x
-                by = dragged.y + self.chain_height(dragged)
-                d = math.hypot(t["x"] - bx, t["y"] - by)
-                limit = best_d
+                # a point just inside the left edge of the reporter
+                px = dragged.x + 10.0 * z
+                py = dragged.y + size["h"] / 2.0
+                pad_x, pad_y = SNAP_SLOT_X * z, SNAP_SLOT_Y * z
+                if (t["x"] - pad_x <= px <= t["x"] + t["w"] + pad_x and
+                        t["y"] - pad_y <= py <= t["y"] + t["h"] + pad_y):
+                    score = math.hypot(px - (t["x"] + t["w"] / 2.0),
+                                       py - (t["y"] + t["h"] / 2.0))
             else:
-                d = math.hypot(t["x"] - dragged.x, t["y"] - dragged.y)
-                limit = best_d
-            if d < limit and d < best_d:
-                best, best_d = t, d
+                # the notch at the top of what is being dragged, except when
+                # joining above a script, where its bottom edge does the work
+                bx = dragged.x
+                by = dragged.y + (tail if t["kind"] == "before" else 0.0)
+                dx, dy = abs(t["x"] - bx), abs(t["y"] - by)
+                if dx <= SNAP_X * z and dy <= SNAP_Y * z:
+                    score = dy + dx * 0.35
+            if score is not None and (best_score is None or score < best_score):
+                best, best_score = t, score
         return best
 
     def show_hint(self, target: Optional[dict]):
