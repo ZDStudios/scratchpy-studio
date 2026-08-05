@@ -177,6 +177,29 @@ colour so your palette never turns into soup.
 <img src="docs/screenshot-packages.png" width="900" alt="The package dashboard">
 </div>
 
+### A shelf to browse
+
+<div align="center">
+<img src="docs/screenshot-packagebrowser.png" width="900" alt="The package browser">
+</div>
+
+**Packages → Browse packages** opens a shelf of around 85 libraries worth
+trying, each with a plain description and an honest note about **how well it
+fits block programming**:
+
+| | |
+|---|---|
+| **Ready made blocks** | ScratchPy has hand-written blocks for it |
+| **Fits nicely** | its functions turn into blocks cleanly |
+| **Opens a window** | works, but draws in a window of its own |
+| **Needs hardware** | works, but wants a device plugged in |
+| **Hard to use as blocks** | installs fine, but its ideas do not map well |
+
+Anything already installed, or already turned into blocks, is marked. Type any
+name at all and **Look it up on PyPI** fetches its real description, version and
+`requires-python`, and tells you whether **your** Python can run it — so you
+find out before installing, not after.
+
 * Popular libraries (**requests, numpy, pandas, matplotlib, pillow, pygame,
   turtle**) also get hand-written, friendlier blocks.
 * Any importable module works — including standard library ones like `turtle`

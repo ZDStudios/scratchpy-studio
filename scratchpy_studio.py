@@ -48,7 +48,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 APP_NAME = "ScratchPy Studio"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 PROJECT_EXT = ".spy"
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -3974,14 +3974,28 @@ class CategoryStrip(tk.Canvas):
         super().__init__(master, width=76, bg=UI["panel"], highlightthickness=0)
         self.app = app
         self.selected = "events"
+        self.factor = 1.0            # grows a little on a big screen
         self.marker = 0.0            # where the highlight is, in pixels
         self.bind("<Button-1>", self.on_click)
         self.bind("<Configure>", lambda e: self.redraw())
         self.bind("<MouseWheel>",
                   lambda e: self.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
+    def item_height(self) -> int:
+        return int(round(self.ITEM_H * self.factor))
+
+    def set_factor(self, factor: float):
+        """Give the strip a little more room on a bigger window."""
+        factor = max(1.0, min(1.45, float(factor)))
+        if abs(factor - self.factor) < 0.02:
+            return
+        self.factor = factor
+        self.configure(width=int(round(76 * factor)))
+        self.marker = CAT_ORDER.index(self.selected) * self.item_height()
+        self.redraw()
+
     def on_click(self, ev):
-        idx = int(self.canvasy(ev.y) // self.ITEM_H)
+        idx = int(self.canvasy(ev.y) // self.item_height())
         if 0 <= idx < len(CAT_ORDER):
             self.select(CAT_ORDER[idx])
 
@@ -3994,7 +4008,7 @@ class CategoryStrip(tk.Canvas):
         if cat not in CATS:
             return
         self.selected = cat
-        target = CAT_ORDER.index(cat) * self.ITEM_H
+        target = CAT_ORDER.index(cat) * self.item_height()
         if not self.app.animations_on():
             self.marker = target
             self.redraw()
@@ -4010,24 +4024,31 @@ class CategoryStrip(tk.Canvas):
 
     def redraw(self):
         self.delete("all")
+        f = self.factor
+        step = self.item_height()
+        wide = int(round(76 * f))
         info = CATS.get(self.selected, CATS["events"])
-        self.create_rectangle(0, self.marker, 76, self.marker + self.ITEM_H,
+        self.create_rectangle(0, self.marker, wide, self.marker + step,
                               fill="#F0F2F6", outline="")
-        self.create_rectangle(0, self.marker + 4, 4, self.marker + self.ITEM_H - 4,
+        self.create_rectangle(0, self.marker + 4 * f, 4 * f,
+                              self.marker + step - 4 * f,
                               fill=info["color"], outline="")
+        middle = wide / 2.0
         for i, cat in enumerate(CAT_ORDER):
             shade = CATS[cat]
-            y = i * self.ITEM_H
-            grown = 1.0 if cat == self.selected else 0.0
-            r = 9 + 1.5 * grown
-            self.create_oval(38 - r, y + 16 - r, 38 + r, y + 16 + r,
+            y = i * step
+            grown = 1.5 if cat == self.selected else 0.0
+            r = (9 + grown) * f
+            self.create_oval(middle - r, y + 16 * f - r, middle + r,
+                             y + 16 * f + r,
                              fill=shade["color"], outline=shade["dark"], width=1)
-            self.create_text(38, y + 36, text=shade["name"], anchor="center",
+            self.create_text(middle, y + 36 * f, text=shade["name"],
+                             anchor="center",
                              fill=UI["text"] if cat == self.selected else "#8A93A5",
-                             font=(FONT_FAMILY, 8,
+                             font=(FONT_FAMILY, max(8, int(round(8 * f))),
                                    "bold" if cat == self.selected else "normal"))
-        self.configure(scrollregion=(0, 0, 76,
-                                     len(CAT_ORDER) * self.ITEM_H + 4))
+        self.configure(scrollregion=(0, 0, wide,
+                                     len(CAT_ORDER) * step + 4))
 
 
 class PaletteView(ttk.Frame):
@@ -4941,6 +4962,123 @@ POPULAR = ["requests", "numpy", "pandas", "matplotlib", "pillow", "pygame",
            "rich", "flask", "beautifulsoup4", "openpyxl", "tqdm", "pyfiglet",
            "colorama", "scipy", "sympy", "emoji", "qrcode", "pyttsx3"]
 
+# --------------------------------------------------------------------------- #
+#  How well a package suits block programming. Honest labels, not marketing.
+# --------------------------------------------------------------------------- #
+
+FIT_LEVELS = {
+    "blocks":  ("Ready made blocks", "#0FBD8C",
+                "ScratchPy has hand written blocks for this one."),
+    "good":    ("Fits nicely", "#4CBF56",
+                "Its functions turn into blocks cleanly."),
+    "window":  ("Opens a window", "#CF8B17",
+                "Works, but it draws in a window of its own, so run it with "
+                "the green flag rather than clicking a single block."),
+    "device":  ("Needs hardware", "#E4572E",
+                "Works, but it wants a device plugged in before it can do "
+                "anything."),
+    "tricky":  ("Hard to use as blocks", "#B36B00",
+                "Installs fine, but its ideas do not turn into blocks very "
+                "well."),
+}
+
+#  name, what it is for, how well it fits
+PACKAGE_CATALOGUE = [
+    ("requests", "Fetch web pages and talk to web APIs", "blocks"),
+    ("numpy", "Fast maths over big lists of numbers", "blocks"),
+    ("pandas", "Tables of data, like a spreadsheet", "blocks"),
+    ("matplotlib", "Draw charts and graphs", "blocks"),
+    ("pillow", "Open, change and save pictures", "blocks"),
+    ("pygame", "Make games with graphics and sound", "window"),
+    ("rich", "Colourful text, tables and progress bars", "good"),
+    ("colorama", "Coloured text in the console", "good"),
+    ("pyfiglet", "Turn words into big letters made of text", "good"),
+    ("emoji", "Put emoji into text by name", "good"),
+    ("tqdm", "Progress bars for loops", "good"),
+    ("beautifulsoup4", "Pull information out of web pages", "good"),
+    ("lxml", "Fast reading of HTML and XML", "good"),
+    ("openpyxl", "Read and write Excel files", "good"),
+    ("python-docx", "Read and write Word documents", "good"),
+    ("pypdf", "Read, split and join PDF files", "good"),
+    ("qrcode", "Make QR codes", "good"),
+    ("pyperclip", "Copy and paste through the clipboard", "good"),
+    ("humanize", "Friendly dates and file sizes", "good"),
+    ("faker", "Invent realistic names and addresses for testing", "good"),
+    ("arrow", "Dates and times that are easier to work with", "good"),
+    ("pytz", "Time zones", "good"),
+    ("sympy", "Algebra: solve equations, work with symbols", "good"),
+    ("scipy", "Science and engineering maths", "good"),
+    ("statsmodels", "Statistics and modelling", "tricky"),
+    ("scikit-learn", "Machine learning", "tricky"),
+    ("plotly", "Interactive charts in a browser", "window"),
+    ("seaborn", "Prettier statistical charts", "window"),
+    ("wordcloud", "Make word cloud pictures", "good"),
+    ("gtts", "Turn text into speech using Google", "good"),
+    ("pyttsx3", "Speak text out loud offline", "good"),
+    ("playsound", "Play a sound file", "good"),
+    ("pydub", "Cut and join audio", "good"),
+    ("moviepy", "Edit video", "tricky"),
+    ("opencv-python", "See and change images from a camera", "window"),
+    ("imageio", "Read and write images and gifs", "good"),
+    ("qrcode-terminal", "Show QR codes in the console", "good"),
+    ("flask", "Make a small website", "tricky"),
+    ("fastapi", "Make a web API", "tricky"),
+    ("httpx", "Web requests, including async", "good"),
+    ("websockets", "Live two way connections", "tricky"),
+    ("paho-mqtt", "Talk to smart home devices", "good"),
+    ("pyserial", "Talk to something over a USB serial port", "device"),
+    ("esptool", "Flash firmware onto ESP chips", "device"),
+    ("adafruit-blinka", "CircuitPython hardware on a computer", "device"),
+    ("gpiozero", "Control Raspberry Pi pins", "device"),
+    ("rpi-gpio", "Raspberry Pi pins, the older way", "device"),
+    ("pyautogui", "Move the mouse and press keys for you", "window"),
+    ("keyboard", "Watch and send key presses", "window"),
+    ("psutil", "See how busy the computer is", "good"),
+    ("py-cpuinfo", "Details about the processor", "good"),
+    ("speedtest-cli", "Measure your internet speed", "good"),
+    ("yfinance", "Share prices and market data", "good"),
+    ("geopy", "Turn place names into map coordinates", "good"),
+    ("folium", "Draw maps you can open in a browser", "good"),
+    ("wikipedia", "Search and read Wikipedia", "good"),
+    ("googletrans", "Translate text", "good"),
+    ("deep-translator", "Translate text, several services", "good"),
+    ("pyjokes", "One line programmer jokes", "good"),
+    ("cowsay", "A cow says your message", "good"),
+    ("art", "Text art and fancy fonts", "good"),
+    ("termcolor", "Coloured console text", "good"),
+    ("tabulate", "Neat tables in the console", "good"),
+    ("questionary", "Ask questions with arrow key menus", "good"),
+    ("click", "Build command line tools", "tricky"),
+    ("typer", "Command line tools with type hints", "tricky"),
+    ("pyyaml", "Read and write YAML files", "good"),
+    ("toml", "Read and write TOML files", "good"),
+    ("jsonschema", "Check that data has the right shape", "good"),
+    ("cryptography", "Encrypt and sign things properly", "tricky"),
+    ("bcrypt", "Hash passwords safely", "good"),
+    ("qrtools", "Read QR codes from pictures", "tricky"),
+    ("schedule", "Run a job every day or every hour", "good"),
+    ("watchdog", "Notice when files change", "good"),
+    ("send2trash", "Delete files to the recycle bin", "good"),
+    ("chardet", "Work out a file's text encoding", "good"),
+    ("markdown", "Turn markdown into HTML", "good"),
+    ("jinja2", "Fill in templates", "good"),
+    ("pytest", "Write tests for your code", "tricky"),
+    ("black", "Tidy up the layout of Python code", "tricky"),
+    ("discord.py", "Make a Discord bot", "tricky"),
+    ("python-telegram-bot", "Make a Telegram bot", "tricky"),
+    ("praw", "Read and post to Reddit", "good"),
+    ("spotipy", "Control Spotify", "good"),
+    ("turtle", "Draw with a turtle (already in Python)", "blocks"),
+]
+
+
+def catalogue_entry(name: str) -> Optional[tuple]:
+    key = name.lower().replace("_", "-")
+    for entry in PACKAGE_CATALOGUE:
+        if entry[0].lower().replace("_", "-") == key:
+            return entry
+    return None
+
 STDLIB_MODULES = ["turtle", "math", "random", "statistics", "datetime", "json",
                   "os", "sys", "re", "csv", "time", "collections", "itertools",
                   "hashlib", "urllib.request", "sqlite3", "tkinter", "socket",
@@ -5036,6 +5174,73 @@ class PackageManager:
                           name), log, done)
 
     # -- module -> blocks --------------------------------------------------- #
+
+    def pypi_info(self, name: str, done: Callable[[dict], None]):
+        """Ask pypi.org about a package: what it is, and whether it fits here."""
+        def worker():
+            import urllib.request
+            url = "https://pypi.org/pypi/%s/json" % urllib.parse.quote(str(name))
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "ScratchPyStudio/" + APP_VERSION,
+                              "Accept": "application/json"})
+            info = {"name": name}
+            try:
+                with urllib.request.urlopen(request, timeout=15) as reply:
+                    data = json.loads(reply.read().decode("utf-8", "replace"))
+                info.update(self.read_pypi(data))
+            except Exception as exc:
+                info["error"] = "%s: %s" % (type(exc).__name__, exc)
+            self.app.ui(lambda: done(info))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def read_pypi(self, data: dict) -> dict:
+        """Pick out the few things that decide whether a package will work."""
+        core = data.get("info") or {}
+        out = {
+            "name": core.get("name", ""),
+            "version": core.get("version", ""),
+            "summary": (core.get("summary") or "").strip(),
+            "requires_python": (core.get("requires_python") or "").strip(),
+            "home": core.get("project_urls", {}).get("Homepage") or
+                    core.get("home_page") or "",
+        }
+        files = (data.get("urls") or [])
+        wheels = [f for f in files if f.get("packagetype") == "bdist_wheel"]
+        names = [f.get("filename", "") for f in wheels]
+        out["pure"] = any("-py3-none-any" in n or "-py2.py3-none-any" in n
+                          for n in names)
+        out["wheels"] = len(wheels)
+        out["source_only"] = bool(files) and not wheels
+        out["python_ok"] = self.python_matches(out["requires_python"])
+        return out
+
+    def python_matches(self, spec: str) -> bool:
+        """A rough but useful reading of a requires-python line."""
+        if not spec:
+            return True
+        here = tuple(int(p) for p in platform.python_version_tuple()[:2])
+        for piece in spec.split(","):
+            piece = piece.strip()
+            match = re.match(r"^(>=|<=|==|!=|~=|<|>)\s*([0-9][0-9.]*)", piece)
+            if not match:
+                continue
+            op, raw = match.group(1), match.group(2)
+            parts = [int(p) for p in raw.rstrip(".").split(".") if p.isdigit()]
+            want = tuple(parts[:2]) if parts else (0,)
+            mine = here[:len(want)]
+            if op == ">=" and not mine >= want:
+                return False
+            if op == ">" and not mine > want:
+                return False
+            if op == "<=" and not mine <= want:
+                return False
+            if op == "<" and not mine < want:
+                return False
+            if op == "==" and mine != want:
+                return False
+            if op == "!=" and mine == want:
+                return False
+        return True
 
     def modules_of(self, dist: str, done: Callable[[List[str]], None]):
         def parse(text: str):
@@ -5508,9 +5713,13 @@ class PackagesPane(ttk.Frame):
 
         quick = tk.Frame(self, bg=UI["panel"])
         quick.grid(row=3, column=0, sticky="ew", padx=8, pady=(6, 2))
+        tk.Button(quick, text="Browse packages...", command=app.browse_packages,
+                  relief="flat", bd=0, bg="#DCE8FF", fg="#3373CC",
+                  font=(FONT_FAMILY, 8, "bold"), cursor="hand2", padx=8,
+                  activebackground="#C7DBFF").pack(side="left", padx=(0, 8))
         tk.Label(quick, text="Popular:", bg=UI["panel"], fg="#8A93A5",
                  font=(FONT_FAMILY, 8)).pack(side="left")
-        for name in POPULAR[:8]:
+        for name in POPULAR[:6]:
             tk.Button(quick, text=name, relief="flat", bd=0, bg="#EEF1F6",
                       fg=UI["text"], font=(FONT_FAMILY, 8), cursor="hand2",
                       activebackground="#DDE3EC",
@@ -5957,6 +6166,29 @@ class App:
         outer.add(self.console, weight=0)
         self.root.after(150, self.init_sashes)
         self.root.bind("<Map>", lambda e: self.root.after(60, self.init_sashes))
+        self.root.bind("<Configure>", self.on_resize)
+
+    def on_resize(self, ev=None):
+        """Let the category strip grow a little on a bigger window."""
+        if ev is not None and ev.widget is not self.root:
+            return
+        if getattr(self, "_resize_job", None):
+            try:
+                self.root.after_cancel(self._resize_job)
+            except Exception:
+                pass
+        self._resize_job = self.root.after(120, self.fit_to_window)
+
+    def fit_to_window(self):
+        self._resize_job = None
+        try:
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+            if width < 200 or height < 200:
+                return
+            self.categories.set_factor(min(width / 1440.0, height / 900.0))
+        except Exception:
+            pass
 
     def init_sashes(self):
         """Give the panes a sensible starting size (weights only affect resizing)."""
@@ -5968,9 +6200,10 @@ class App:
             width = self.upper.winfo_width()
             if height < 200 or width < 400:
                 return
+            grow = max(1.0, min(1.45, min(width / 1440.0, height / 900.0)))
             self.outer.sashpos(0, int(height * 0.80))
-            self.upper.sashpos(0, 396)
-            self.upper.sashpos(1, max(560, width - 372))
+            self.upper.sashpos(0, int(396 * grow))
+            self.upper.sashpos(1, max(560, width - int(372 * grow)))
             self._sashes_done = True
         except Exception:
             pass
@@ -6002,7 +6235,8 @@ class App:
                      None,
                      ("Try a web request...", self.web_tester),
                      ("Show generated code", lambda: self.show_tab(0))]),
-            ("Packages", [("Package dashboard", self.open_packages),
+            ("Packages", [("Browse packages...", self.browse_packages),
+                          ("Package dashboard", self.open_packages),
                           ("Blocks for a module...", self.quick_module),
                           None,
                           ("Refresh installed list",
@@ -6851,6 +7085,9 @@ class App:
     def web_tester(self):
         WebTesterDialog(self.root, self)
 
+    def browse_packages(self):
+        PackageBrowser(self.root, self)
+
     # -- help --------------------------------------------------------------- #
 
     def help_guide(self):
@@ -7135,6 +7372,251 @@ class WebTesterDialog:
         self.app.workspace.add_block(first)
         self.app.categories.select("web")
         self.app.status("Added the request to the workspace.")
+
+
+class PackageBrowser:
+    """A shelf of packages worth trying, and how well each one fits."""
+
+    def __init__(self, parent, app: "App"):
+        self.app = app
+        self.installed: Dict[str, str] = {}
+        self.looked_up: Dict[str, dict] = {}
+        top = self.top = tk.Toplevel(parent)
+        top.title("Browse packages")
+        top.configure(bg=UI["panel"])
+        top.transient(parent)
+        top.geometry("940x610")
+        top.minsize(700, 440)
+        try:
+            ttk.Style().configure("Browse.Treeview", rowheight=22,
+                                  font=(FONT_FAMILY, 9))
+            ttk.Style().configure("Browse.Treeview.Heading",
+                                  font=(FONT_FAMILY, 9, "bold"))
+        except Exception:
+            pass
+
+        head = tk.Frame(top, bg=UI["panel"])
+        head.pack(fill="x", padx=20, pady=(16, 4))
+        tk.Label(head, text="Packages you can add", bg=UI["panel"],
+                 fg=UI["text"],
+                 font=(FONT_FAMILY, 14, "bold")).pack(side="left")
+        tk.Label(head, text="   installing into " +
+                            app.interpreter_label(short=True), bg=UI["panel"],
+                 fg="#8A93A5", font=(FONT_FAMILY, 9)).pack(side="left")
+
+        row = tk.Frame(top, bg=UI["panel"])
+        row.pack(fill="x", padx=20, pady=(6, 8))
+        self.search = tk.StringVar()
+        entry = tk.Entry(row, textvariable=self.search, bd=0, relief="flat",
+                         font=(FONT_FAMILY, 10), bg="#FFFFFF",
+                         highlightthickness=1, highlightbackground=UI["border"])
+        entry.pack(side="left", fill="x", expand=True, ipady=4)
+        entry.bind("<Return>", lambda e: self.lookup_typed())
+        self.search.trace_add("write", lambda *a: self.fill())
+        tk.Button(row, text="Look it up on PyPI", command=self.lookup_typed,
+                  relief="flat", bd=0, bg="#EEF1F6", fg=UI["text"],
+                  font=(FONT_FAMILY, 9), cursor="hand2",
+                  padx=10).pack(side="left", padx=(8, 0))
+
+        columns = ("fit", "about", "state")
+        self.tree = ttk.Treeview(top, columns=columns, show="tree headings",
+                                 selectmode="browse", height=15,
+                                 style="Browse.Treeview")
+        self.tree.heading("#0", text="Package")
+        self.tree.heading("fit", text="How well it fits")
+        self.tree.heading("about", text="What it is for")
+        self.tree.heading("state", text="Already here")
+        self.tree.column("#0", width=180, minwidth=140, stretch=False)
+        self.tree.column("fit", width=176, minwidth=160, stretch=False)
+        self.tree.column("about", width=380, minwidth=200)
+        self.tree.column("state", width=112, minwidth=100, stretch=False,
+                         anchor="center")
+        bar = ttk.Scrollbar(top, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y", pady=4)
+        self.tree.pack(fill="both", expand=True, padx=(20, 0))
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self.show_details())
+        self.tree.bind("<Double-1>", lambda e: self.install())
+        for key, (label, colour, _) in FIT_LEVELS.items():
+            self.tree.tag_configure(key, foreground=colour)
+
+        self.details = tk.Label(top, text="", bg="#F4F6FA", fg=UI["text"],
+                                font=(FONT_FAMILY, 9), anchor="w",
+                                justify="left", wraplength=700)
+        self.details.pack(fill="x", padx=20, pady=(10, 0), ipady=8, ipadx=10)
+
+        buttons = tk.Frame(top, bg=UI["panel"])
+        buttons.pack(fill="x", padx=20, pady=12)
+        self.install_btn = tk.Button(
+            buttons, text="Install and make blocks", command=self.install,
+            relief="flat", bd=0, bg=CATS["packages"]["color"], fg="#FFFFFF",
+            activebackground=CATS["packages"]["dark"], activeforeground="#FFFFFF",
+            font=(FONT_FAMILY, 10, "bold"), padx=18, pady=7, cursor="hand2")
+        self.install_btn.pack(side="left")
+        tk.Button(buttons, text="Just make blocks", command=self.blocks_only,
+                  relief="flat", bd=0, bg="#EEF1F6", fg=UI["text"],
+                  font=(FONT_FAMILY, 9), padx=14, pady=7,
+                  cursor="hand2").pack(side="left", padx=8)
+        tk.Button(buttons, text="Close", command=top.destroy, relief="flat",
+                  bd=0, bg="#EEF1F6", fg=UI["text"], font=(FONT_FAMILY, 9),
+                  padx=16, pady=7, cursor="hand2").pack(side="right")
+
+        top.bind("<Escape>", lambda e: top.destroy())
+        entry.focus_set()
+        self.fill()
+        self.refresh_installed()
+        try:
+            top.update_idletasks()
+            x = parent.winfo_rootx() + (parent.winfo_width() -
+                                        top.winfo_width()) // 2
+            top.geometry("+%d+%d" % (max(0, x), parent.winfo_rooty() + 60))
+        except Exception:
+            pass
+
+    # -- the list ----------------------------------------------------------- #
+
+    def refresh_installed(self):
+        def done(data):
+            self.installed = {str(d.get("name", "")).lower().replace("_", "-"):
+                              str(d.get("version", "")) for d in data}
+            self.fill()
+        self.app.packages.list_installed(done)
+
+    def has_blocks(self, name: str) -> bool:
+        key = name.lower().replace("_", "-")
+        for pack in self.app.project.packs:
+            for field in ("dist", "module"):
+                if str(pack.get(field, "")).lower().replace("_", "-") == key:
+                    return True
+        return False
+
+    def fill(self):
+        query = self.search.get().strip().lower()
+        self.tree.delete(*self.tree.get_children())
+        shown = 0
+        for name, about, fit in PACKAGE_CATALOGUE:
+            if query and query not in name.lower() and query not in about.lower():
+                continue
+            self.add_row(name, about, fit)
+            shown += 1
+        for name, info in sorted(self.looked_up.items()):
+            if any(self.tree.item(i, "text") == name
+                   for i in self.tree.get_children()):
+                continue
+            if query and query not in name.lower():
+                continue
+            self.add_row(name, info.get("summary", "") or "from PyPI",
+                         info.get("fit", "good"))
+            shown += 1
+        if not shown:
+            self.tree.insert("", "end", text=query or "",
+                             values=("", "Press 'Look it up on PyPI' to check "
+                                         "this name.", ""))
+
+    def add_row(self, name, about, fit):
+        key = name.lower().replace("_", "-")
+        label = FIT_LEVELS.get(fit, FIT_LEVELS["good"])[0]
+        state = ""
+        if self.has_blocks(name):
+            state = "blocks added"
+        elif key in self.installed:
+            state = "installed"
+        self.tree.insert("", "end", text=name, tags=(fit,),
+                         values=(label, about, state))
+
+    def chosen(self) -> str:
+        picked = self.tree.selection()
+        if not picked:
+            return ""
+        return self.tree.item(picked[0], "text").strip()
+
+    def show_details(self):
+        name = self.chosen()
+        if not name:
+            return
+        entry = catalogue_entry(name)
+        fit = entry[2] if entry else self.looked_up.get(name, {}).get("fit", "good")
+        text = FIT_LEVELS.get(fit, FIT_LEVELS["good"])[2]
+        info = self.looked_up.get(name)
+        if info and not info.get("error"):
+            bits = ["%s %s" % (info.get("name") or name, info.get("version", ""))]
+            if info.get("summary"):
+                bits.append(info["summary"])
+            if info.get("requires_python"):
+                bits.append("needs Python " + info["requires_python"] +
+                            (" - yours is fine" if info.get("python_ok")
+                             else " - YOUR PYTHON IS TOO OLD OR TOO NEW"))
+            if info.get("source_only"):
+                bits.append("no ready built files, so pip may need build tools")
+            text = "  |  ".join(bits) + "\n" + text
+        elif info and info.get("error"):
+            text = "Could not reach pypi.org (" + \
+                   info["error"].split(":")[0] + ").\n" + text
+        else:
+            text += "\nPress 'Look it up on PyPI' for its description and "\
+                    "which Python versions it needs."
+        self.details.configure(text=text)
+        if not info:
+            self.app.packages.pypi_info(name, lambda got: self.got_info(name, got))
+
+    def got_info(self, name: str, info: dict):
+        entry = catalogue_entry(name)
+        info["fit"] = entry[2] if entry else self.guess_fit(info)
+        self.looked_up[name] = info
+        if self.chosen() == name:
+            self.show_details()
+
+    def guess_fit(self, info: dict) -> str:
+        if info.get("error"):
+            return "good"
+        if not info.get("python_ok"):
+            return "tricky"
+        if info.get("source_only"):
+            return "tricky"
+        return "good"
+
+    # -- doing something with the choice ------------------------------------ #
+
+    def lookup_typed(self):
+        name = self.search.get().strip()
+        if not name:
+            return
+        self.details.configure(text="Asking pypi.org about " + name + " ...")
+        self.app.packages.pypi_info(name, lambda got: self.after_lookup(name, got))
+
+    def after_lookup(self, name: str, info: dict):
+        if info.get("error"):
+            self.details.configure(
+                text="Could not find %s on pypi.org (%s)." %
+                     (name, info["error"].split(":")[0]))
+            return
+        self.got_info(info.get("name") or name, info)
+        self.fill()
+        for item in self.tree.get_children():
+            if self.tree.item(item, "text").lower() == \
+                    (info.get("name") or name).lower():
+                self.tree.selection_set(item)
+                self.tree.see(item)
+                break
+        self.show_details()
+
+    def install(self):
+        name = self.chosen()
+        if not name:
+            self.details.configure(text="Pick something from the list first.")
+            return
+        self.app.show_tab(2)
+        self.app.packages_pane.pkg_var.set(name)
+        self.app.packages_pane.install()
+        self.top.destroy()
+
+    def blocks_only(self):
+        name = self.chosen()
+        if not name:
+            return
+        self.app.show_tab(2)
+        self.app.packages_pane.make_blocks_for_dist(name)
+        self.top.destroy()
 
 
 class MCPDialog:
