@@ -1,0 +1,67 @@
+name: Build ScratchPy Studio apps
+
+# Builds the Windows .exe, the macOS .app and the Linux binary.
+# Run it from the Actions tab (Run workflow), or push a tag like v1.0.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+            artifact: ScratchPy-Studio-Windows
+          - os: macos-latest
+            label: macOS
+            artifact: ScratchPy-Studio-macOS
+          - os: ubuntu-latest
+            label: Linux
+            artifact: ScratchPy-Studio-Linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tk on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Self test
+        if: runner.os != 'Linux'
+        run: python scratchpy_studio.py --selftest
+
+      - name: Self test (headless)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb
+          xvfb-run -a python scratchpy_studio.py --selftest
+
+      - name: Build
+        if: runner.os != 'Linux'
+        run: python build_apps.py
+
+      - name: Build (headless)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python build_apps.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*
+            !dist/**/*.pyc
+          if-no-files-found: error

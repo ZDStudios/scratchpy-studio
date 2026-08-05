@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ScratchPy working files
+scratchpy_settings.json
+scratchpy_log.txt
+scratchpy_blocks/
+scratchpy_selftest/
+*.spy
+
+# Generated programs (ScratchPy writes these next to the project)
+/main.py
+/imported*.py
+/pasted*.py
+
+# Build output
+build/
+dist/
+*.spec
