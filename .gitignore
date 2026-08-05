@@ -12,11 +12,11 @@ scratchpy_blocks/
 scratchpy_selftest/
 *.spy
 
-# Generated programs (ScratchPy writes these next to the project)
-/main.py
-/imported*.py
-/pasted*.py
-_scratchpy_piece.py
+# Generated programs. ScratchPy writes a .py next to the project for every
+# tab, so ignore everything at the top level except the project's own files.
+/*.py
+!/scratchpy_studio.py
+!/build_apps.py
 
 # Build output
 build/
