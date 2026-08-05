@@ -44,11 +44,36 @@ and hand in.
 | 🧩 **148 blocks** | Hat blocks, C-shaped loops, hexagonal booleans, reporter ovals that drop into slots — the real Scratch 3 shapes and colours |
 | 🐍 **Real Python, live** | The generated source updates as you drag. No hidden interpreter |
 | ▶️ **It actually runs** | `print`, `input`, errors and a stop button, all wired to the built-in console |
+| 👆 **Click a block to try it** | A loose block runs on its own and reports what it printed in a bubble underneath |
 | 🌐 **Talks to the web out of the box** | GET, POST, headers, JSON, downloads — using `urllib` from the standard library, so there is nothing to install |
 | 📥 **Import any `.py`** | Turn a program you already have into blocks — loops, functions, try/except, f-strings and all |
 | 📦 **Every PyPI package** | pip dashboard installs anything and turns it into blocks automatically |
 | 🤖 **Works with AI** | Built-in MCP server so an assistant can build blocks alongside you |
 | 🎨 **Looks the part** | Because half the point of Scratch is that it looks inviting |
+
+---
+
+## Click a block to try it
+
+Blocks lying loose on the canvas are a scratch pad. Click one and it runs on its
+own, with a little bubble underneath showing what it printed.
+
+<div align="center">
+<img src="docs/screenshot-click.png" width="900" alt="Clicking a loose stack shows its output in a bubble">
+</div>
+
+* Click a **loose block or stack** → it runs from there down.
+* Click a **reporter** (the oval ones) → the bubble shows its value.
+* Click a **hat** → its whole script runs, the same as the green flag.
+* Blocks that sit inside a script under a hat are left alone, so nothing runs by
+  accident while you are building.
+
+Mistakes are explained rather than dumped — the bubble shows
+`ZeroDivisionError: division by zero` and the full traceback goes to the console.
+Custom blocks, variables and packages all work, because the piece is compiled
+with the same imports and definitions as the rest of the tab. Variables start
+from their starting values each time, and anything still running after 15
+seconds is stopped.
 
 ---
 
@@ -314,6 +339,7 @@ Until you save, they go next to the application.
 | `Ctrl` `I` | Import a Python file |
 | `Ctrl` `Z` | Undo |
 | `Ctrl` `,` | Settings |
+| Click a loose block | Run just that block and see what it printed |
 | Drag a block onto the palette | Delete it |
 | Right-click the canvas | Clean up, delete all |
 

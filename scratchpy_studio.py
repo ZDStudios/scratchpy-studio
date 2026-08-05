@@ -48,7 +48,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 APP_NAME = "ScratchPy Studio"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 PROJECT_EXT = ".spy"
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -2913,6 +2913,25 @@ class Renderer:
 #  SECTION 8 - the workspace: drag, drop, snap, edit
 # =========================================================================== #
 
+PIECE_FILE = "_scratchpy_piece.py"   # the scratch pad a clicked block runs in
+PIECE_TIMEOUT = 15.0                 # seconds before a clicked block is stopped
+
+
+def rounded_points(x: float, y: float, w: float, h: float,
+                   r: float) -> List[float]:
+    """A rounded rectangle as a flat list of canvas coordinates."""
+    r = max(1.0, min(r, w / 2.0, h / 2.0))
+    pts = []
+    pts.extend(_arc(x + w - r, y + r, r, -math.pi / 2, 0.0, 6))
+    pts.extend(_arc(x + w - r, y + h - r, r, 0.0, math.pi / 2, 6))
+    pts.extend(_arc(x + r, y + h - r, r, math.pi / 2, math.pi, 6))
+    pts.extend(_arc(x + r, y + r, r, math.pi, math.pi * 1.5, 6))
+    flat: List[float] = []
+    for px, py in pts:
+        flat.extend((px, py))
+    return flat
+
+
 # How near a block has to be before it snaps. Wide and short: being off to the
 # side is fine, being at the wrong height is not.
 SNAP_X = 115.0        # sideways slack for stacking
@@ -2934,6 +2953,7 @@ class WorkspaceView(ttk.Frame):
         self.editor_win = None
         self.editor_target = None
         self.panning = False
+        self.piece_busy = False
 
         self.canvas = tk.Canvas(self, bg=UI["canvas_bg"], highlightthickness=0,
                                 width=600, height=400,
@@ -3004,6 +3024,7 @@ class WorkspaceView(ttk.Frame):
         cv.delete("block")
         cv.delete("snaphint")
         cv.delete("watermark")
+        cv.delete("bubble")
         self.L.clear()
         if self.file is None:
             return
@@ -3058,6 +3079,7 @@ class WorkspaceView(ttk.Frame):
     def on_press(self, ev):
         self.canvas.focus_set()
         self.close_editor()
+        self.canvas.delete("bubble")
         cx, cy = self.cxy(ev)
         item = self.topmost(cx, cy)
         if item is None:
@@ -3209,6 +3231,7 @@ class WorkspaceView(ttk.Frame):
         if d is None:
             return
         b = d["block"]
+        clicked = not d.get("moved")
         # work out where it lands before letting go of the drag state, because
         # best_target needs it
         target = self.best_target(b)
@@ -3224,6 +3247,185 @@ class WorkspaceView(ttk.Frame):
             self.apply_target(b, target)
         self.refresh()
         self.app.on_change()
+        if clicked:
+            self.click_block(b)
+
+    # -- click a loose block to try it -------------------------------------- #
+
+    def click_block(self, block: Block):
+        """Scratch style: a click on a loose block runs it and shows what
+        came out.  Blocks that are part of a real script under a hat are left
+        alone, so nothing runs by accident while you are building."""
+        root = block.top()
+        if root.spec.is_hat:
+            if block is not root:
+                return                     # part of a program: do not disturb
+            piece = block.next             # clicking the hat runs its script
+            if piece is None:
+                return
+        else:
+            piece = block
+        anchor = piece if piece.spec.is_value else piece.last()
+        self.run_piece(anchor, piece)
+
+    def piece_source(self, piece: Block) -> str:
+        """A small standalone program that runs just this block."""
+        temp = SpyFile("piece")
+        temp.header_imports = list(self.file.header_imports)
+        temp.header_code = list(self.file.header_code)
+        for script in self.file.scripts:
+            if script.spec.shape == "define" or script.spec.id == "event_receive":
+                temp.scripts.append(script.copy())
+        hat = Block(SPECS["event_start"])
+        if piece.spec.is_value:
+            show = Block(SPECS["text_print"])
+            show.attach_slot("msg", piece.copy())
+            hat.attach_next(show)
+        else:
+            hat.attach_next(piece.copy())
+        temp.scripts.append(hat)
+        return generate_file(self.app.project, temp)
+
+    def run_piece(self, anchor: Block, piece: Block):
+        if self.piece_busy:
+            return
+        try:
+            source = self.piece_source(piece)
+        except Exception as exc:
+            self.show_bubble(anchor, "Could not build that: %s" % exc, True)
+            return
+        problem = check_syntax(source)
+        if problem:
+            self.show_bubble(anchor, "That does not make sense yet:\n" + problem,
+                             True)
+            return
+        folder = self.app.project.folder()
+        path = os.path.join(folder, PIECE_FILE)
+        try:
+            os.makedirs(folder, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(source)
+        except Exception as exc:
+            self.show_bubble(anchor, "Could not write the test file: %s" % exc,
+                             True)
+            return
+        command = run_command(path, self.app.interpreter())
+        if not command:
+            self.show_bubble(anchor, NO_PYTHON_HINT, True)
+            return
+
+        self.piece_busy = True
+        self.show_bubble(anchor, "running...")
+        label = describe_block(piece)
+
+        def worker():
+            kw = dict(capture_output=True, text=True, encoding="utf-8",
+                      errors="replace", cwd=folder, timeout=PIECE_TIMEOUT,
+                      input="")
+            if IS_WINDOWS:
+                kw["creationflags"] = NO_WINDOW
+            try:
+                res = subprocess.run(command, **kw)
+                out, err, code = res.stdout, res.stderr, res.returncode
+            except subprocess.TimeoutExpired as slow:
+                out = (slow.stdout or "")
+                if isinstance(out, bytes):
+                    out = out.decode("utf-8", "replace")
+                err, code = "", -9
+            except Exception as exc:
+                out, err, code = "", str(exc), -1
+            self.app.ui(lambda: self.piece_done(anchor, label, out, err, code))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def piece_done(self, anchor: Block, label: str, out: str, err: str,
+                   code: int):
+        self.piece_busy = False
+        try:
+            os.remove(os.path.join(self.app.project.folder(), PIECE_FILE))
+        except Exception:
+            pass
+        out = (out or "").rstrip()
+        err = (err or "").rstrip()
+        self.app.console.write("sys", "--- tried: %s ---" % label)
+        if out:
+            for line in out.split("\n"):
+                self.app.console.write("out", line)
+        if err:
+            for line in err.split("\n"):
+                self.app.console.write("err", line)
+        if code == -9:
+            text = (out + "\n" if out else "") + \
+                   "(still going after %d seconds, so I stopped it)" % PIECE_TIMEOUT
+            self.show_bubble(anchor, text, True)
+            return
+        if err:
+            last = [l for l in err.split("\n") if l.strip()]
+            friendly = last[-1] if last else "something went wrong"
+            self.show_bubble(anchor, (out + "\n" if out else "") + friendly, True)
+            return
+        self.show_bubble(anchor, out if out else "(it ran, but printed nothing)")
+
+    # -- the little report bubble ------------------------------------------- #
+
+    def wrap_lines(self, text: str, width: int = 52) -> List[str]:
+        lines: List[str] = []
+        for raw in str(text).split("\n"):
+            if not raw:
+                lines.append("")
+            while len(raw) > width:
+                cut = raw.rfind(" ", 0, width)
+                if cut < width // 2:
+                    cut = width
+                lines.append(raw[:cut])
+                raw = raw[cut:].lstrip()
+            if raw:
+                lines.append(raw)
+        return lines or [""]
+
+    def show_bubble(self, block: Block, text: str, bad: bool = False):
+        """A little speech bubble under a block, the way Scratch reports."""
+        self.canvas.delete("bubble")
+        rect = self.L.rect.get(block.id)
+        if not rect:
+            return
+        x, y, w, h = rect
+        z = self.renderer.scale
+        lines = self.wrap_lines(text)
+        clipped = False
+        if len(lines) > 9:
+            lines, clipped = lines[:9], True
+        font = tkfont.Font(family=MONO_FAMILY, size=max(7, int(round(9 * z))))
+        line_h = font.metrics("linespace") + 2
+        width = max([font.measure(l) for l in lines] + [60]) + 22 * z
+        height = line_h * len(lines) + (14 if not clipped else 26) * z
+        bx = x + 14 * z
+        by = y + h + 11 * z
+        edge = "#E38B8B" if bad else "#C9CDD6"
+        fill = "#FFF6F6" if bad else "#FFFFFF"
+        tag = "bubble"
+        self.canvas.create_polygon(
+            [bx + 9 * z, by, bx + 27 * z, by, bx + 18 * z, by - 10 * z],
+            fill=fill, outline=edge, width=1, tags=tag)
+        self.canvas.create_polygon(
+            self.renderer.m.pill(bx, by, width, height) if height < 34 * z else
+            rounded_points(bx, by, width, height, 10 * z),
+            fill=fill, outline=edge, width=1, tags=tag)
+        self.canvas.create_polygon(
+            [bx + 10 * z, by - 1, bx + 26 * z, by - 1, bx + 18 * z, by - 9 * z],
+            fill=fill, outline=fill, tags=tag)
+        ty = by + 7 * z
+        for line in lines:
+            self.canvas.create_text(bx + 11 * z, ty, anchor="nw", text=line,
+                                    font=font,
+                                    fill="#B3261E" if bad else "#3A4356",
+                                    tags=tag)
+            ty += line_h
+        if clipped:
+            self.canvas.create_text(bx + 11 * z, ty, anchor="nw",
+                                    text="... the rest is in the console",
+                                    font=(FONT_FAMILY, max(7, int(8 * z))),
+                                    fill="#8A93A5", tags=tag)
+        self.canvas.tag_raise(tag)
 
     # -- snapping ----------------------------------------------------------- #
 
@@ -6394,7 +6596,12 @@ class App:
             "   block into it.\n"
             "4. Press the green flag to run. Output appears in the\n"
             "   console at the bottom, and the real Python is in the\n"
-            "   'Python code' tab.\n"
+            "   'Python code' tab.\n\n"
+            "Trying one block\n"
+            "   Click a block that is not joined to a hat and it runs on\n"
+            "   its own, with a little bubble underneath showing what it\n"
+            "   printed. Click a hat to run its whole script. Variables\n"
+            "   start from their starting values each time.\n"
             "5. 'Code folder' at the top opens the folder those .py\n"
             "   files are written into.\n\n"
             "Bringing code in\n"

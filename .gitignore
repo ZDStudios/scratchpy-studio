@@ -16,6 +16,7 @@ scratchpy_selftest/
 /main.py
 /imported*.py
 /pasted*.py
+_scratchpy_piece.py
 
 # Build output
 build/
