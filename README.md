@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-4C97FF?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-59C059)](#)
-[![One file](https://img.shields.io/badge/one%20file-6%2C700%20lines-FFAB19)](scratchpy_studio.py)
+[![One file](https://img.shields.io/badge/one%20file-7%2C000%20lines-FFAB19)](scratchpy_studio.py)
 [![Build](https://github.com/ZDStudios/scratchpy-studio/actions/workflows/build-apps.yml/badge.svg)](https://github.com/ZDStudios/scratchpy-studio/actions/workflows/build-apps.yml)
 [![Download](https://img.shields.io/badge/download-windows%20%7C%20macos%20%7C%20linux-855CD6)](https://github.com/ZDStudios/scratchpy-studio/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-0FBD8C)](LICENSE)
@@ -41,13 +41,57 @@ and hand in.
 
 |  | |
 |---|---|
-| 🧩 **135 blocks** | Hat blocks, C-shaped loops, hexagonal booleans, reporter ovals that drop into slots — the real Scratch 3 shapes and colours |
+| 🧩 **148 blocks** | Hat blocks, C-shaped loops, hexagonal booleans, reporter ovals that drop into slots — the real Scratch 3 shapes and colours |
 | 🐍 **Real Python, live** | The generated source updates as you drag. No hidden interpreter |
 | ▶️ **It actually runs** | `print`, `input`, errors and a stop button, all wired to the built-in console |
+| 🌐 **Talks to the web out of the box** | GET, POST, headers, JSON, downloads — using `urllib` from the standard library, so there is nothing to install |
 | 📥 **Import any `.py`** | Turn a program you already have into blocks — loops, functions, try/except, f-strings and all |
 | 📦 **Every PyPI package** | pip dashboard installs anything and turns it into blocks automatically |
 | 🤖 **Works with AI** | Built-in MCP server so an assistant can build blocks alongside you |
 | 🎨 **Looks the part** | Because half the point of Scratch is that it looks inviting |
+
+---
+
+## The internet, with nothing installed
+
+The **Web** category is built in. No `pip install requests`, no venv, no
+waiting — it is `urllib` from the standard library dressed up as blocks.
+
+<div align="center">
+<img src="docs/screenshot-web.png" width="900" alt="The built-in web blocks">
+</div>
+
+| Block | What it does |
+|---|---|
+| `text from [url]` | The page or API answer as text |
+| `JSON from [url]` | The answer already turned into records and lists |
+| `send (GET▾) to [url]` | The all-purpose API sender — GET, POST, PUT, PATCH, DELETE, HEAD |
+| `send (POST▾) to [url] with JSON { }` | Send a record as a JSON body |
+| `post form { } to [url]` | The kind of form a web page would send |
+| `send header [name] as [value]` | Set it once; every request after it carries the header — this is where an API key goes |
+| `status code of [url]` · `[url] is working` | 200, 404, or 0 when nothing answers |
+| `download [url] to file [path]` | Save a picture or a file |
+| `[base] with values { }` | Builds `...?q=cats&page=2` safely |
+| `web safe [text]` | Percent-encodes anything for a URL |
+
+A 404 still hands you the body, so you can read the error message an API sends
+back. Only `http://` and `https://` addresses are accepted — a redirect cannot
+be talked into reading a local file.
+
+### Try it before you build it
+
+**Run → Try a web request**, or the button at the top of the Web category:
+
+<div align="center">
+<img src="docs/screenshot-webtester.png" width="900" alt="The built-in request tester">
+</div>
+
+Pick a method, paste a URL, add a header, press Send. You get the status code,
+how long it took, and the reply with JSON pretty-printed. **Make a block from
+this** then drops the matching blocks straight into your workspace.
+
+The tester runs the *same* helper functions your blocks compile to, so what you
+test is exactly what your program will do.
 
 ---
 
@@ -238,7 +282,7 @@ writes a tidy module with a `main()` and an `if __name__ == "__main__":` guard.
 python scratchpy_studio.py --selftest
 ```
 
-Builds the entire interface head-lessly, then **compiles every one of the 135
+Builds the entire interface head-lessly, then **compiles every one of the 148
 blocks**, checks the block definitions are well formed, round-trips a project
 through save and load, exercises the Python importer and the MCP server, and
 finally runs the generated example program and checks its output.

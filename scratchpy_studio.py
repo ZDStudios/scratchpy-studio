@@ -48,7 +48,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 APP_NAME = "ScratchPy Studio"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.1.0"
 PROJECT_EXT = ".spy"
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -69,13 +69,14 @@ CATS: Dict[str, Dict[str, str]] = {
     "variables": {"name": "Variables", "color": "#FF8C1A", "dark": "#DB6E00"},
     "lists":     {"name": "Lists",     "color": "#FF661A", "dark": "#E64D00"},
     "files":     {"name": "Files",     "color": "#5CB1D6", "dark": "#2E8EB8"},
+    "web":       {"name": "Web",       "color": "#CF63CF", "dark": "#A63FA6"},
     "functions": {"name": "Functions", "color": "#FF6680", "dark": "#FF3355"},
     "python":    {"name": "Python",    "color": "#4C97FF", "dark": "#3373CC"},
     "packages":  {"name": "Packages",  "color": "#0FBD8C", "dark": "#0B8E69"},
 }
 
 CAT_ORDER = ["events", "control", "operators", "text", "variables", "lists",
-             "files", "functions", "python", "packages"]
+             "files", "web", "functions", "python", "packages"]
 
 UI = {
     "topbar":      "#855CD6",   # Scratch purple menu bar
@@ -567,6 +568,90 @@ def ask(prompt):
     except EOFError:
         return ""
 ''',
+    # ---- talking to the internet, with nothing installed ------------------ #
+    "web": '''
+WEB_HEADERS = {"User-Agent": "ScratchPy Studio"}
+web_last = {"status": 0, "reason": "", "url": ""}
+
+
+def web_header(name, value):
+    """Send this header with every request from now on. API keys go here."""
+    WEB_HEADERS[str(name)] = str(value)
+
+
+def web_send(method, url, body=None, data=None, form=None, timeout=30):
+    """Send any kind of web request and give back the reply as text."""
+    address = str(url)
+    if not address.lower().startswith(("http://", "https://")):
+        raise ValueError("only http:// and https:// addresses work: " + address)
+    headers = dict(WEB_HEADERS)
+    payload = None
+    if data is not None:
+        payload = json.dumps(data).encode("utf-8")
+        headers.setdefault("Content-Type", "application/json")
+    elif form is not None:
+        payload = urllib.parse.urlencode(form).encode("utf-8")
+        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    elif body is not None:
+        payload = str(body).encode("utf-8")
+    question = urllib.request.Request(address, data=payload, headers=headers,
+                                      method=str(method).upper())
+    try:
+        with urllib.request.urlopen(question, timeout=timeout) as reply:
+            web_last.update(status=reply.status, reason=reply.reason,
+                            url=reply.url)
+            charset = reply.headers.get_content_charset() or "utf-8"
+            return reply.read().decode(charset, "replace")
+    except urllib.error.HTTPError as problem:
+        # 404, 500 and friends still have a body worth reading
+        web_last.update(status=problem.code, reason=str(problem.reason),
+                        url=address)
+        charset = problem.headers.get_content_charset() or "utf-8"
+        return problem.read().decode(charset, "replace")
+    except urllib.error.URLError as problem:
+        web_last.update(status=0, reason=str(problem.reason), url=address)
+        raise
+
+
+def web_get(url, timeout=30):
+    """The text of a web page or an API answer."""
+    return web_send("GET", url, timeout=timeout)
+
+
+def web_json(url, timeout=30):
+    """Fetch an API and turn its answer into records and lists."""
+    return json.loads(web_get(url, timeout) or "null")
+
+
+def web_status(url, timeout=30):
+    """200 means it worked, 404 means it is missing, 0 means no answer."""
+    try:
+        web_send("GET", url, timeout=timeout)
+    except Exception:
+        return 0
+    return web_last["status"]
+
+
+def web_download(url, path, timeout=60):
+    """Save whatever is at a web address into a file."""
+    address = str(url)
+    if not address.lower().startswith(("http://", "https://")):
+        raise ValueError("only http:// and https:// addresses work: " + address)
+    question = urllib.request.Request(address, headers=dict(WEB_HEADERS))
+    with urllib.request.urlopen(question, timeout=timeout) as reply:
+        web_last.update(status=reply.status, reason=reply.reason, url=reply.url)
+        with open(path, "wb") as out:
+            out.write(reply.read())
+    return path
+
+
+def web_address(base, values):
+    """Add ?name=value pieces to a web address, spelled out safely."""
+    query = urllib.parse.urlencode(values or {})
+    if not query:
+        return str(base)
+    return str(base) + ("&" if "?" in str(base) else "?") + query
+''',
 }
 
 
@@ -897,6 +982,76 @@ B("sys_folder", "files", "reporter", "this program's folder",
 
 B("sys_join", "files", "reporter", "path %s(a,folder) then %s(b,file.txt)",
   "os.path.join({a}, {b})", imports=("os",))
+
+# ------------------------------------------------------------------- WEB --- #
+#  All of these use urllib from the standard library, so they work the moment
+#  you open ScratchPy - there is nothing to install.
+
+WEB_IMPORTS = ("json", "urllib.request", "urllib.parse", "urllib.error")
+
+B("web_get", "web", "reporter", "text from %s(url,https://example.com)",
+  "web_get({url})", imports=WEB_IMPORTS, helpers=("web",),
+  tip="Download a web page or API answer as text. No package needed.")
+
+B("web_json", "web", "reporter",
+  "JSON from %s(url,https://api.github.com/repos/python/cpython)",
+  "web_json({url})", imports=WEB_IMPORTS, helpers=("web",),
+  tip="Fetch an API and turn the answer into records and lists you can "
+      "read with the 'at key' block.")
+
+B("web_send", "web", "reporter",
+  "send %q(method,GET|POST|PUT|PATCH|DELETE|HEAD) to %s(url,https://example.com)",
+  "web_send({method}, {url})", imports=WEB_IMPORTS, helpers=("web",),
+  tip="The all purpose API sender. Gives back the reply as text.")
+
+B("web_send_json", "web", "reporter",
+  "send %q(method,POST|PUT|PATCH|DELETE) to %s(url,https://example.com) "
+  "with JSON %r(data,{})",
+  "web_send({method}, {url}, data={data})", imports=WEB_IMPORTS,
+  helpers=("web",),
+  tip="Send a record as a JSON body. Drop an 'empty record' block in, or "
+      "type it in Python: {'name': 'Zayn'}")
+
+B("web_send_text", "web", "reporter",
+  "send %q(method,POST|PUT|PATCH) to %s(url,https://example.com) "
+  "with text %a(body,hello)",
+  "web_send({method}, {url}, body={body})", imports=WEB_IMPORTS,
+  helpers=("web",))
+
+B("web_post_form", "web", "reporter",
+  "post form %r(fields,{}) to %s(url,https://example.com)",
+  'web_send("POST", {url}, form={fields})', imports=WEB_IMPORTS,
+  helpers=("web",),
+  tip="Send the kind of form a web page would send.")
+
+B("web_header", "web", "stack",
+  "send header %s(name,Authorization) as %s(value,Bearer my-key)",
+  "web_header({name}, {value})", imports=WEB_IMPORTS, helpers=("web",),
+  tip="Set this once near the top of your program. Every request after it "
+      "carries the header - this is where an API key goes.")
+
+B("web_status", "web", "reporter", "status code of %s(url,https://example.com)",
+  "web_status({url})", imports=WEB_IMPORTS, helpers=("web",),
+  tip="200 means it worked, 404 means missing, 0 means no answer at all.")
+
+B("web_last_status", "web", "reporter", "status code of the last request",
+  'web_last["status"]', imports=WEB_IMPORTS, helpers=("web",))
+
+B("web_ok", "web", "boolean", "%s(url,https://example.com) is working",
+  "(web_status({url}) == 200)", imports=WEB_IMPORTS, helpers=("web",))
+
+B("web_download", "web", "stack",
+  "download %s(url,https://example.com/picture.png) to file %s(path,picture.png)",
+  "web_download({url}, {path})", imports=WEB_IMPORTS, helpers=("web",))
+
+B("web_address", "web", "reporter",
+  "%s(base,https://example.com/search) with values %r(values,{})",
+  "web_address({base}, {values})", imports=WEB_IMPORTS, helpers=("web",),
+  tip="Builds an address like ...?q=cats&page=2 out of a record.")
+
+B("web_escape", "web", "reporter", "web safe %a(text,hello world)",
+  "urllib.parse.quote(str({text}))", imports=("urllib.parse",),
+  tip="Turns spaces and symbols into the %20 style a web address needs.")
 
 # ------------------------------------------------------------- FUNCTIONS --- #
 
@@ -3426,6 +3581,21 @@ class WorkspaceView(ttk.Frame):
         self.refresh()
         self.app.on_change()
 
+    def add_block(self, block: Block):
+        """Drop a ready made block (or stack) into the middle of the canvas."""
+        if self.file is None:
+            return
+        self.app.push_undo()
+        block.x = self.canvas.canvasx(80)
+        block.y = self.canvas.canvasy(80)
+        for script in self.file.scripts:
+            if abs(script.x - block.x) < 14 and abs(script.y - block.y) < 14:
+                block.x += 30
+                block.y += 30
+        self.file.scripts.append(block)
+        self.refresh()
+        self.app.on_change()
+
     def add_block_center(self, spec: BlockSpec):
         """Used when a palette block is clicked instead of dragged."""
         if self.file is None:
@@ -3455,7 +3625,7 @@ class WorkspaceView(ttk.Frame):
 class CategoryStrip(tk.Canvas):
     """The narrow column of coloured category buttons."""
 
-    ITEM_H = 56
+    ITEM_H = 51
 
     def __init__(self, master, app: "App"):
         super().__init__(master, width=76, bg=UI["panel"], highlightthickness=0)
@@ -3463,6 +3633,8 @@ class CategoryStrip(tk.Canvas):
         self.selected = "events"
         self.bind("<Button-1>", self.on_click)
         self.bind("<Configure>", lambda e: self.redraw())
+        self.bind("<MouseWheel>",
+                  lambda e: self.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
     def on_click(self, ev):
         idx = int(self.canvasy(ev.y) // self.ITEM_H)
@@ -3484,10 +3656,12 @@ class CategoryStrip(tk.Canvas):
                                       fill="#F0F2F6", outline="")
                 self.create_rectangle(0, y, 3, y + self.ITEM_H,
                                       fill=info["color"], outline="")
-            self.create_oval(28, y + 8, 48, y + 28, fill=info["color"],
+            self.create_oval(29, y + 7, 47, y + 25, fill=info["color"],
                              outline=info["dark"], width=1)
-            self.create_text(38, y + 38, text=info["name"], anchor="center",
+            self.create_text(38, y + 36, text=info["name"], anchor="center",
                              fill=UI["text"], font=(FONT_FAMILY, 8))
+        self.configure(scrollregion=(0, 0, 76,
+                                     len(CAT_ORDER) * self.ITEM_H + 4))
 
 
 class PaletteView(ttk.Frame):
@@ -3630,6 +3804,13 @@ class PaletteView(ttk.Frame):
                 items.append(("header", "returning a value"))
             for bid in PALETTE["functions"]:
                 items.append(("block", bid))
+        elif cat == "web":
+            items.append(("button", ("Try a request...", self.app.web_tester)))
+            items.append(("note", "These work straight away - they use urllib "
+                                  "from the standard library, so there is "
+                                  "nothing to install."))
+            for bid in PALETTE["web"]:
+                items.append(("block", bid))
         elif cat == "packages":
             items.append(("button", ("Manage packages",
                                      self.app.open_packages)))
@@ -3680,10 +3861,11 @@ class PaletteView(ttk.Frame):
                                fill=tint, font=(FONT_FAMILY, 9, "bold"))
                 y += 26 * z
             elif kind == "note":
-                cv.create_text(14, y, anchor="nw", text=str(item[1]),
-                               width=220, fill="#8A93A5",
-                               font=(FONT_FAMILY, 9))
-                y += 34 * z
+                note = cv.create_text(14, y, anchor="nw", text=str(item[1]),
+                                      width=250, fill="#8A93A5",
+                                      font=(FONT_FAMILY, 9))
+                box = cv.bbox(note)
+                y += (box[3] - box[1] if box else 34) + 10 * z
             elif kind == "button":
                 label, cmd = item[1]
                 btn = tk.Button(cv, text=label, command=cmd, relief="flat",
@@ -5367,6 +5549,7 @@ class App:
             ("Run", [("Run this file", self.run),
                      ("Stop", self.stop),
                      None,
+                     ("Try a web request...", self.web_tester),
                      ("Show generated code", lambda: self.show_tab(0))]),
             ("Packages", [("Package dashboard", self.open_packages),
                           ("Blocks for a module...", self.quick_module),
@@ -6197,6 +6380,9 @@ class App:
     def show_mcp(self):
         MCPDialog(self.root, self)
 
+    def web_tester(self):
+        WebTesterDialog(self.root, self)
+
     # -- help --------------------------------------------------------------- #
 
     def help_guide(self):
@@ -6243,6 +6429,239 @@ class App:
         if not self.confirm_discard():
             return
         self.root.destroy()
+
+
+_WEB_RUNTIME: Dict[str, Any] = {}
+
+
+def web_runtime() -> Dict[str, Any]:
+    """The very same helper functions the generated programs use.
+
+    Built by running the block library's own source, so the tester and your
+    blocks can never drift apart.
+    """
+    if not _WEB_RUNTIME:
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+        namespace: Dict[str, Any] = {"json": json, "urllib": urllib}
+        exec(HELPERS["web"], namespace)
+        _WEB_RUNTIME.update(namespace)
+    return _WEB_RUNTIME
+
+
+class WebTesterDialog:
+    """A small request tester, so you can try an API before building blocks."""
+
+    def __init__(self, parent, app: "App"):
+        self.app = app
+        self.busy = False
+        top = self.top = tk.Toplevel(parent)
+        top.title("Try a web request")
+        top.configure(bg=UI["panel"])
+        top.transient(parent)
+
+        tk.Label(top, text="Try a web request", bg=UI["panel"],
+                 fg=CATS["web"]["dark"],
+                 font=(FONT_FAMILY, 14, "bold")).pack(anchor="w", padx=20,
+                                                      pady=(16, 2))
+        tk.Label(top, text="Nothing is installed for this - it uses urllib, "
+                           "which comes with Python.",
+                 bg=UI["panel"], fg="#8A93A5",
+                 font=(FONT_FAMILY, 9)).pack(anchor="w", padx=20)
+
+        line = tk.Frame(top, bg=UI["panel"])
+        line.pack(fill="x", padx=20, pady=(12, 4))
+        self.method = tk.StringVar(value="GET")
+        box = ttk.Combobox(line, textvariable=self.method, width=8,
+                           state="readonly",
+                           values=["GET", "POST", "PUT", "PATCH", "DELETE",
+                                   "HEAD"])
+        box.pack(side="left")
+        self.url = tk.StringVar(value="https://api.github.com/repos/python/cpython")
+        entry = tk.Entry(line, textvariable=self.url, bd=0, relief="flat",
+                         font=(MONO_FAMILY, 10), bg="#FFFFFF",
+                         highlightthickness=1,
+                         highlightbackground=UI["border"])
+        entry.pack(side="left", fill="x", expand=True, padx=8, ipady=4)
+        entry.bind("<Return>", lambda e: self.send())
+        self.send_btn = tk.Button(line, text="Send", command=self.send,
+                                  relief="flat", bd=0, bg=CATS["web"]["color"],
+                                  fg="#FFFFFF",
+                                  activebackground=CATS["web"]["dark"],
+                                  activeforeground="#FFFFFF", cursor="hand2",
+                                  font=(FONT_FAMILY, 10, "bold"), padx=18)
+        self.send_btn.pack(side="left")
+
+        extra = tk.Frame(top, bg=UI["panel"])
+        extra.pack(fill="x", padx=20)
+        tk.Label(extra, text="Body (for POST and friends)", bg=UI["panel"],
+                 fg="#8A93A5", font=(FONT_FAMILY, 8)).pack(anchor="w")
+        self.body = tk.Text(extra, height=3, font=(MONO_FAMILY, 9),
+                            bg="#FFFFFF", relief="flat", padx=6, pady=4,
+                            highlightthickness=1,
+                            highlightbackground=UI["border"], wrap="none")
+        self.body.pack(fill="x", pady=(2, 6))
+
+        head = tk.Frame(top, bg=UI["panel"])
+        head.pack(fill="x", padx=20)
+        tk.Label(head, text="Header", bg=UI["panel"], fg="#8A93A5",
+                 font=(FONT_FAMILY, 8)).pack(side="left")
+        self.head_name = tk.StringVar()
+        self.head_value = tk.StringVar()
+        for var, width, hint in ((self.head_name, 16, "Authorization"),
+                                 (self.head_value, 28, "Bearer my-key")):
+            e = tk.Entry(head, textvariable=var, bd=0, relief="flat", width=width,
+                         font=(FONT_FAMILY, 9), bg="#FFFFFF",
+                         highlightthickness=1,
+                         highlightbackground=UI["border"])
+            e.pack(side="left", padx=6, ipady=2)
+            self._hint(e, var, hint)
+
+        self.status = tk.Label(top, text="", bg=UI["panel"], fg="#8A93A5",
+                               font=(FONT_FAMILY, 9, "bold"), anchor="w")
+        self.status.pack(fill="x", padx=20, pady=(10, 2))
+        self.out = tk.Text(top, width=88, height=16, font=(MONO_FAMILY, 9),
+                           bg="#1E2430", fg="#DDE3EC", relief="flat", padx=10,
+                           pady=8, wrap="none", state="disabled",
+                           highlightthickness=0)
+        self.out.pack(fill="both", expand=True, padx=20)
+
+        row = tk.Frame(top, bg=UI["panel"])
+        row.pack(pady=12)
+        tk.Button(row, text="Make a block from this", command=self.to_block,
+                  relief="flat", bd=0, bg=UI["accent"], fg="#FFFFFF",
+                  activebackground="#3373CC", activeforeground="#FFFFFF",
+                  font=(FONT_FAMILY, 9, "bold"), padx=16, pady=6,
+                  cursor="hand2").pack(side="left", padx=6)
+        tk.Button(row, text="Copy the reply", command=self.copy, relief="flat",
+                  bd=0, bg="#EEF1F6", fg=UI["text"], font=(FONT_FAMILY, 9),
+                  padx=14, pady=6, cursor="hand2").pack(side="left", padx=6)
+        tk.Button(row, text="Close", command=top.destroy, relief="flat", bd=0,
+                  bg="#EEF1F6", fg=UI["text"], font=(FONT_FAMILY, 9), padx=16,
+                  pady=6, cursor="hand2").pack(side="left", padx=6)
+        top.bind("<Escape>", lambda e: top.destroy())
+        entry.focus_set()
+        try:
+            top.update_idletasks()
+            x = parent.winfo_rootx() + (parent.winfo_width() -
+                                        top.winfo_width()) // 2
+            top.geometry("+%d+%d" % (max(0, x), parent.winfo_rooty() + 60))
+        except Exception:
+            pass
+
+    def _hint(self, entry: tk.Entry, var: tk.StringVar, text: str):
+        entry.insert(0, text)
+        entry.configure(fg="#AAB0BC")
+        entry.bind("<FocusIn>", lambda e: (entry.delete(0, "end"),
+                                           entry.configure(fg=UI["text"]))
+                   if var.get() == text else None)
+        entry.bind("<FocusOut>", lambda e: (entry.insert(0, text),
+                                            entry.configure(fg="#AAB0BC"))
+                   if not var.get() else None)
+        self.__dict__.setdefault("_hints", {})[str(var)] = text
+
+    def field(self, var: tk.StringVar) -> str:
+        value = var.get()
+        if value == self.__dict__.get("_hints", {}).get(str(var)):
+            return ""
+        return value
+
+    # -- sending ------------------------------------------------------------ #
+
+    def send(self):
+        if self.busy:
+            return
+        url = self.url.get().strip()
+        if not url:
+            return
+        method = self.method.get()
+        body = self.body.get("1.0", "end-1c").strip()
+        name = self.field(self.head_name).strip()
+        value = self.field(self.head_value).strip()
+        self.busy = True
+        self.send_btn.configure(text="...", state="disabled")
+        self.status.configure(text="Sending...", fg="#8A93A5")
+        started = time.time()
+
+        def worker():
+            runtime = web_runtime()
+            try:
+                if name and value:
+                    runtime["web_header"](name, value)
+                text = runtime["web_send"](method, url,
+                                           body=body or None, timeout=25)
+                last = dict(runtime["web_last"])
+                error = ""
+            except Exception as exc:
+                text, error = "", "%s: %s" % (type(exc).__name__, exc)
+                last = dict(runtime.get("web_last", {}))
+            took = time.time() - started
+            self.app.ui(lambda: self.show(text, error, last, took))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show(self, text: str, error: str, last: dict, took: float):
+        try:
+            self.busy = False
+            self.send_btn.configure(text="Send", state="normal")
+        except Exception:
+            return
+        if error:
+            self.status.configure(text="Could not reach it - " + error,
+                                  fg=UI["danger"])
+        else:
+            code = last.get("status", 0)
+            good = 200 <= code < 300
+            self.status.configure(
+                text="%s %s   -   %d characters in %.2f seconds"
+                     % (code, last.get("reason", ""), len(text), took),
+                fg="#2E9E5B" if good else "#B36B00")
+        pretty = text
+        try:
+            pretty = json.dumps(json.loads(text), indent=2)[:20000]
+        except Exception:
+            pretty = text[:20000]
+        self.out.configure(state="normal")
+        self.out.delete("1.0", "end")
+        self.out.insert("1.0", pretty or error or "(the reply was empty)")
+        self.out.configure(state="disabled")
+
+    def copy(self):
+        self.top.clipboard_clear()
+        self.top.clipboard_append(self.out.get("1.0", "end-1c"))
+        self.status.configure(text="Copied to the clipboard.", fg="#8A93A5")
+
+    def to_block(self):
+        """Drop a block into the workspace that does what was just tested."""
+        url = self.url.get().strip()
+        method = self.method.get()
+        body = self.body.get("1.0", "end-1c").strip()
+        if method == "GET" and not body:
+            block = Block(SPECS["web_get"])
+            block.values["url"] = url
+        elif body:
+            block = Block(SPECS["web_send_text"])
+            block.fields["method"] = method if method != "GET" else "POST"
+            block.values["url"] = url
+            block.values["body"] = body
+        else:
+            block = Block(SPECS["web_send"])
+            block.fields["method"] = method
+            block.values["url"] = url
+        name = self.field(self.head_name).strip()
+        value = self.field(self.head_value).strip()
+        holder = Block(SPECS["text_print"])
+        holder.attach_slot("msg", block)
+        first = holder
+        if name and value:
+            header = Block(SPECS["web_header"])
+            header.values["name"] = name
+            header.values["value"] = value
+            header.attach_next(holder)
+            first = header
+        self.app.workspace.add_block(first)
+        self.app.categories.select("web")
+        self.app.status("Added the request to the workspace.")
 
 
 class MCPDialog:
