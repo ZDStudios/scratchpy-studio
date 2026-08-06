@@ -57,6 +57,7 @@ and hand in.
 | 🔊 **It talks** | A Sound category that speaks, plays notes and beats drums — using the voice and speaker the computer already has |
 | 📥 **Import any `.py`** | Turn a program you already have into blocks — loops, functions, try/except, f-strings and all |
 | 📦 **Every PyPI package** | pip dashboard installs anything and turns it into blocks automatically |
+| 📦 **Makes a real app** | One button turns your blocks into a double-clickable `.exe` — upload any picture and it becomes the icon |
 | ⬆️ **Updates itself** | Looks for a newer version once a day, shows you what changed, and installs it when you say so |
 | 🤖 **Works with AI** | Built-in MCP server so an assistant can build blocks alongside you |
 | 🎨 **Looks the part** | Because half the point of Scratch is that it looks inviting |
@@ -196,6 +197,35 @@ the tab is what your program will do.
 > Using `pyttsx3` instead? Its catch is that nothing is heard until
 > `runAndWait()` is called. ScratchPy now ships hand-written blocks for it that
 > always do both — as it does for `gtts` and `playsound`.
+
+---
+
+## Ship it as an app
+
+**Build .exe** on the toolbar turns the tab you are on into an application
+anyone can double-click — no Python installed, nothing to set up.
+
+<div align="center">
+<img src="docs/screenshot-build.png" width="900" alt="The build window, with a chosen picture as the icon">
+</div>
+
+**Choose a picture** and it becomes the icon. ScratchPy reads the PNG itself,
+with nothing but `zlib` — every colour type, every bit depth, every line filter,
+transparency and all. It centres the picture in a square, box-filters it down to
+seven sizes and writes a proper multi-size `.ico` (and `.icns` on macOS). GIF
+goes through Tk; a JPEG needs Pillow, and ScratchPy offers to install it rather
+than pretending it can.
+
+The one thing here that is not standard library is PyInstaller. ScratchPy checks
+whether it is there, offers to fetch it with the same pip the Packages tab uses,
+and shows the whole build log as it happens. The finished app lands in `dist/`
+next to your project, and **Open the folder** takes you to it.
+
+* **One single file** — easier to hand to someone, slower to start.
+* **Show a console window** — leave it on if your program prints or asks
+  questions; turn it off only if it opens a window of its own.
+* Build tools work in the system temp folder, not in your project, because
+  OneDrive and Dropbox lock files while they sync and PyInstaller trips over it.
 
 ---
 

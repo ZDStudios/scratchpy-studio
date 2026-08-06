@@ -50,7 +50,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 APP_NAME = "ScratchPy Studio"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 PROJECT_EXT = ".spy"
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -7063,6 +7063,7 @@ class App:
         self.packages = PackageManager(self)
         self.runner = Runner(self)
         self.updater = Updater(self)
+        self.builder = AppBuilder(self)
         self.file_index = 0
         self.undo_stack: List[str] = []
         self.redo_stack: List[str] = []
@@ -7168,6 +7169,9 @@ class App:
         tool("Open", self.open_project)
         tool("Import .py", self.import_python_file)
         tool("Export .py", self.export_all)
+        build_btn = tool("Build %s" % ("an app" if not IS_WINDOWS else ".exe"),
+                         self.build_app)
+        build_btn.configure(fg="#0B8E69", font=(FONT_FAMILY, 9, "bold"))
         folder_btn = tool("Code folder", self.open_folder)
         folder_btn.configure(fg="#3373CC")
         tk.Frame(bar, bg=UI["border"], width=1).pack(side="left", fill="y",
@@ -7294,6 +7298,7 @@ class App:
                       ("Save as...", self.save_as),
                       None,
                       ("Export all Python files", self.export_all),
+                      ("Turn this into an app...", self.build_app),
                       ("Open project folder", self.open_folder),
                       None,
                       ("Exit", self.on_close)]),
@@ -8199,6 +8204,10 @@ class App:
             "   can keep them in a venv beside your project.\n\n"
             "AI\n"
             "   The AI menu shows how to connect an assistant over MCP.\n\n"
+            "Making an app\n"
+            "   'Build .exe' on the toolbar turns the tab you are on into\n"
+            "   an application anyone can double click, with no Python\n"
+            "   needed. Choose a picture and it becomes the icon.\n\n"
             "Keeping up to date\n"
             "   ScratchPy looks for a newer version once a day and offers\n"
             "   to fetch it. Help > Check for updates asks right away.\n"
@@ -8215,6 +8224,11 @@ class App:
             + build_summary() + "\n\n" + REPO_URL +
             "\n\nHelp > Check for updates fetches and installs the newest\n"
             "version. Settings can turn the daily look on or off.")
+
+    def build_app(self):
+        """Open the window that turns this tab into a real application."""
+        self.workspace.close_editor()
+        BuildAppDialog(self.root, self)
 
     def check_for_updates(self):
         """The menu and the Settings button both come here."""
@@ -8654,6 +8668,432 @@ class SoundPane(ttk.Frame):
         self.app.workspace.add_block(first)
         self.app.categories.select("sound")
         self.app.status("Added the sound blocks to the workspace.")
+
+
+class AppBuilder:
+    """Turns one of your generated .py files into a real application.
+
+    This is the one job ScratchPy cannot do from the standard library alone:
+    making a .exe means PyInstaller.  So it checks whether it is there, offers
+    to fetch it with the same pip the Packages tab uses, and gets out of the
+    way.
+    """
+
+    def __init__(self, app: "App"):
+        self.app = app
+
+    def python(self) -> str:
+        return self.app.packages.python()
+
+    def workroom(self) -> str:
+        """PyInstaller's scratch space, kept out of OneDrive and Dropbox.
+
+        Cloud folders lock files while they sync, and PyInstaller trips over
+        that while tidying up after itself.
+        """
+        import tempfile
+        room = os.path.join(tempfile.gettempdir(), "scratchpy_appbuild")
+        os.makedirs(room, exist_ok=True)
+        return room
+
+    def look_for_tools(self, done: Callable[[str], None]):
+        """Find out whether PyInstaller is here. `done(version or '')`."""
+        if not self.python():
+            self.app.ui(lambda: done(""))
+            return
+        self.app.packages.capture(
+            [self.python(), "-c",
+             "import PyInstaller, sys; sys.stdout.write(PyInstaller.__version__)"],
+            lambda text: done((text or "").strip().split("\n")[0]))
+
+    def fetch_tools(self, log: Callable[[str], None],
+                    done: Callable[[int], None]):
+        log("$ pip install pyinstaller")
+        self.app.packages.run(self.app.packages.pip("install", "--upgrade",
+                                                    "pyinstaller"), log, done)
+
+    def command(self, plan: dict) -> List[str]:
+        """The PyInstaller line this plan turns into."""
+        args = [self.python(), "-m", "PyInstaller", "--noconfirm", "--clean",
+                "--name", plan["name"],
+                "--onefile" if plan.get("onefile", True) else "--onedir",
+                "--console" if plan.get("console", True) else "--windowed",
+                "--distpath", plan["into"],
+                "--workpath", os.path.join(self.workroom(), "work"),
+                "--specpath", self.workroom()]
+        if plan.get("icon"):
+            args += ["--icon", plan["icon"]]
+        args.append(plan["source"])
+        return args
+
+    def built_name(self, plan: dict) -> str:
+        """What the finished thing will be called."""
+        name = plan["name"]
+        if IS_WINDOWS:
+            return name + ".exe" if plan.get("onefile", True) else name
+        if sys.platform == "darwin" and not plan.get("console", True):
+            return name + ".app"
+        return name
+
+    def build(self, plan: dict, log: Callable[[str], None],
+              done: Callable[[int, str], None]):
+        """Run PyInstaller. `done(code, where)` when it is over."""
+        args = self.command(plan)
+        log("$ " + " ".join(args[1:]))
+
+        def finished(code):
+            where = os.path.join(plan["into"], self.built_name(plan))
+            done(code, where if os.path.exists(where) else "")
+        self.app.packages.run(args, log, finished)
+
+
+class BuildAppDialog:
+    """Choose a picture, press a button, get an application."""
+
+    def __init__(self, parent, app: "App"):
+        self.app = app
+        self.busy = False
+        self.icon_master: Optional[Raster] = None
+        self.icon_path = ""
+        self.icon_files: Dict[str, str] = {}
+        self.preview_image = None
+        self.made = ""
+
+        top = self.top = tk.Toplevel(parent)
+        top.title("Turn this into an app")
+        top.configure(bg=UI["panel"])
+        top.transient(parent)
+
+        tk.Label(top, text="Turn this into an app", bg=UI["panel"],
+                 fg=UI["accent"], font=(FONT_FAMILY, 14, "bold")).pack(
+                     anchor="w", padx=20, pady=(16, 0))
+        tk.Label(top, text="One file anyone can double click, with no Python "
+                           "installed and nothing to set up.",
+                 bg=UI["panel"], fg="#8A93A5", font=(FONT_FAMILY, 9),
+                 anchor="w", justify="left", wraplength=520).pack(
+                     anchor="w", padx=20, pady=(2, 10))
+
+        body = tk.Frame(top, bg=UI["panel"])
+        body.pack(fill="x", padx=20)
+        left = tk.Frame(body, bg=UI["panel"])
+        left.pack(side="left", fill="both", expand=True)
+
+        tk.Label(left, text="Which tab", bg=UI["panel"], fg=UI["text"],
+                 font=(FONT_FAMILY, 9, "bold")).grid(row=0, column=0,
+                                                     sticky="w", pady=(0, 2))
+        names = [f.name for f in app.project.files]
+        self.which = tk.StringVar(value=app.current_file.name)
+        box = ttk.Combobox(left, textvariable=self.which, values=names,
+                           state="readonly", font=(FONT_FAMILY, 9), width=26)
+        box.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=(0, 2))
+        box.bind("<<ComboboxSelected>>", lambda e: self.suggest_name())
+
+        tk.Label(left, text="Call it", bg=UI["panel"], fg=UI["text"],
+                 font=(FONT_FAMILY, 9, "bold")).grid(row=1, column=0,
+                                                     sticky="w", pady=4)
+        self.name = tk.StringVar(value=safe_module_name(app.current_file.name))
+        tk.Entry(left, textvariable=self.name, bd=0, relief="flat",
+                 font=(FONT_FAMILY, 10), bg="#FFFFFF", highlightthickness=1,
+                 highlightbackground=UI["border"]).grid(row=1, column=1,
+                                                        sticky="ew",
+                                                        padx=(10, 0), ipady=3)
+        left.columnconfigure(1, weight=1)
+
+        self.onefile = tk.BooleanVar(value=True)
+        tk.Checkbutton(left, text="One single file  (easier to share)",
+                       variable=self.onefile, bg=UI["panel"], fg=UI["text"],
+                       activebackground=UI["panel"], bd=0, highlightthickness=0,
+                       font=(FONT_FAMILY, 9)).grid(row=2, column=0,
+                                                   columnspan=2, sticky="w",
+                                                   pady=(8, 0))
+        self.console = tk.BooleanVar(value=True)
+        tk.Checkbutton(left, text="Show a console window",
+                       variable=self.console, bg=UI["panel"], fg=UI["text"],
+                       activebackground=UI["panel"], bd=0, highlightthickness=0,
+                       font=(FONT_FAMILY, 9)).grid(row=3, column=0,
+                                                   columnspan=2, sticky="w")
+        tk.Label(left, text="Leave this ticked if your program prints things "
+                            "or asks questions. Untick it only if it opens a "
+                            "window of its own.",
+                 bg=UI["panel"], fg="#8A93A5", font=(FONT_FAMILY, 8),
+                 anchor="w", justify="left", wraplength=330).grid(
+                     row=4, column=0, columnspan=2, sticky="w", padx=(22, 0))
+
+        right = tk.Frame(body, bg=UI["panel"])
+        right.pack(side="left", padx=(18, 0))
+        tk.Label(right, text="Icon", bg=UI["panel"], fg=UI["text"],
+                 font=(FONT_FAMILY, 9, "bold")).pack(anchor="w")
+        self.preview = tk.Canvas(right, width=104, height=104, bg="#F4F6FA",
+                                 highlightthickness=1,
+                                 highlightbackground=UI["border"])
+        self.preview.pack(pady=4)
+        tk.Button(right, text="Choose a picture...", command=self.pick_picture,
+                  relief="flat", bd=0, bg=UI["accent"], fg="#FFFFFF",
+                  activebackground="#3373CC", activeforeground="#FFFFFF",
+                  font=(FONT_FAMILY, 9, "bold"), cursor="hand2",
+                  padx=8, pady=4).pack(fill="x")
+        row = tk.Frame(right, bg=UI["panel"])
+        row.pack(fill="x", pady=3)
+        for label, cmd in (("ScratchPy logo", self.use_logo),
+                           ("None", self.no_icon)):
+            tk.Button(row, text=label, command=cmd, relief="flat", bd=0,
+                      bg="#EEF1F6", fg=UI["text"], font=(FONT_FAMILY, 8),
+                      cursor="hand2", padx=6).pack(side="left", padx=(0, 4))
+        self.icon_note = tk.Label(right, text="PNG or GIF", bg=UI["panel"],
+                                  fg="#8A93A5", font=(FONT_FAMILY, 8),
+                                  anchor="w", justify="left", wraplength=140)
+        self.icon_note.pack(anchor="w")
+
+        self.status = tk.Label(top, text="", bg=UI["panel"], fg="#8A93A5",
+                               font=(FONT_FAMILY, 9), anchor="w",
+                               justify="left", wraplength=520)
+        self.status.pack(fill="x", padx=20, pady=(12, 2))
+
+        self.log = tk.Text(top, width=76, height=13, font=(MONO_FAMILY, 9),
+                           bg="#1E2430", fg="#DDE3EC", relief="flat", padx=10,
+                           pady=8, wrap="none", state="disabled",
+                           highlightthickness=0)
+        self.log.pack(fill="both", expand=True, padx=20)
+
+        buttons = tk.Frame(top, bg=UI["panel"])
+        buttons.pack(fill="x", padx=20, pady=14)
+        self.go = tk.Button(buttons, text="Build the app", command=self.start,
+                            relief="flat", bd=0, bg="#0FBD8C", fg="#FFFFFF",
+                            activebackground="#0B8E69",
+                            activeforeground="#FFFFFF", cursor="hand2",
+                            font=(FONT_FAMILY, 10, "bold"), padx=22, pady=7)
+        self.go.pack(side="left")
+        self.open_btn = tk.Button(buttons, text="Open the folder",
+                                  command=self.open_folder, relief="flat",
+                                  bd=0, bg="#EEF1F6", fg=UI["text"],
+                                  font=(FONT_FAMILY, 9), cursor="hand2",
+                                  padx=12, pady=7, state="disabled")
+        self.open_btn.pack(side="left", padx=6)
+        tk.Button(buttons, text="Close", command=top.destroy, relief="flat",
+                  bd=0, bg="#EEF1F6", fg=UI["text"], font=(FONT_FAMILY, 9),
+                  cursor="hand2", padx=16, pady=7).pack(side="right")
+
+        self.use_logo()
+        top.bind("<Escape>", lambda e: top.destroy())
+        try:
+            top.update_idletasks()
+            x = parent.winfo_rootx() + (parent.winfo_width() -
+                                        top.winfo_width()) // 2
+            top.geometry("+%d+%d" % (max(0, x), parent.winfo_rooty() + 50))
+        except Exception:
+            pass
+        self.check_tools()
+
+    # -- talking to the person ------------------------------------------------ #
+
+    def say(self, line: str):
+        def do():
+            try:
+                self.log.configure(state="normal")
+                self.log.insert("end", line + "\n")
+                self.log.see("end")
+                self.log.configure(state="disabled")
+            except Exception:
+                pass
+        self.app.ui(do)
+
+    def tell(self, message: str, colour: str = "#8A93A5"):
+        try:
+            self.status.configure(text=message, fg=colour)
+        except Exception:
+            pass
+
+    def suggest_name(self):
+        self.name.set(safe_module_name(self.which.get()))
+
+    def check_tools(self):
+        if not self.app.builder.python():
+            self.tell("Building an app needs a real Python on this computer. "
+                      "ScratchPy can still write and run your code.", "#B36B00")
+            self.go.configure(state="disabled")
+            return
+        self.tell("Looking for PyInstaller...")
+
+        def found(version):
+            if version:
+                self.tell("PyInstaller %s is ready." % version, "#2E9E5B")
+            else:
+                self.tell("PyInstaller is not here yet - ScratchPy will fetch "
+                          "it the first time you build. It is about 10 MB.",
+                          "#B36B00")
+        self.app.builder.look_for_tools(found)
+
+    # -- the icon ------------------------------------------------------------- #
+
+    def pick_picture(self):
+        chosen = filedialog.askopenfilename(
+            parent=self.top, title="Choose a picture for the icon",
+            filetypes=PICTURE_TYPES)
+        if not chosen:
+            return
+        self.tell("Reading %s ..." % os.path.basename(chosen))
+        self.top.update_idletasks()
+
+        def worker():
+            try:
+                master = picture_as_icon(chosen)
+                trouble = ""
+            except Exception as exc:
+                master, trouble = None, str(exc)
+            self.app.ui(lambda: self.picture_ready(chosen, master, trouble))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def picture_ready(self, chosen: str, master, trouble: str):
+        if trouble:
+            self.tell(trouble, UI["danger"])
+            if "Pillow" in trouble and messagebox.askyesno(
+                    "Reading that picture",
+                    "ScratchPy reads PNG and GIF on its own. To read a JPEG "
+                    "it needs Pillow.\n\nInstall Pillow now?",
+                    parent=self.top):
+                self.say("$ pip install pillow")
+                self.app.packages.run(
+                    self.app.packages.pip("install", "pillow"), self.say,
+                    lambda code: self.tell(
+                        "Pillow is in - choose the picture again."
+                        if code == 0 else "Pillow would not install.",
+                        "#2E9E5B" if code == 0 else UI["danger"]))
+            return
+        self.icon_master = master
+        self.icon_path = chosen
+        self.show_preview(master)
+        self.icon_note.configure(text=os.path.basename(chosen))
+        self.tell("That picture will become the icon.", "#2E9E5B")
+
+    def use_logo(self):
+        self.icon_master = draw_icon(256)
+        self.icon_path = ""
+        self.show_preview(self.icon_master)
+        self.icon_note.configure(text="The ScratchPy logo")
+
+    def no_icon(self):
+        self.icon_master = None
+        self.icon_path = ""
+        self.preview.delete("all")
+        self.preview.create_text(52, 52, text="no icon", fill="#AAB0BC",
+                                 font=(FONT_FAMILY, 9))
+        self.icon_note.configure(text="The plain Python icon")
+
+    def show_preview(self, master):
+        """Draw the icon at 96 px, by way of a small PNG Tk can read."""
+        import tempfile
+        try:
+            spot = os.path.join(tempfile.gettempdir(),
+                                "scratchpy_icon_preview.png")
+            with open(spot, "wb") as fh:
+                fh.write(master.scaled(96).png())
+            self.preview_image = tk.PhotoImage(file=spot)
+            self.preview.delete("all")
+            self.preview.create_image(52, 52, image=self.preview_image)
+        except Exception as exc:
+            self.preview.delete("all")
+            self.preview.create_text(52, 52, text="?", fill="#AAB0BC")
+            self.say("(could not draw the preview: %s)" % exc)
+
+    # -- building ------------------------------------------------------------- #
+
+    def start(self):
+        if self.busy:
+            return
+        name = safe_module_name(self.name.get())
+        if not name:
+            self.tell("Give the app a name first.", UI["danger"])
+            return
+        spy = None
+        for candidate in self.app.project.files:
+            if candidate.name == self.which.get():
+                spy = candidate
+                break
+        if spy is None:
+            self.tell("That tab has gone.", UI["danger"])
+            return
+        source = generate_file(self.app.project, spy)
+        problem = check_syntax(source)
+        if problem:
+            self.tell("Those blocks do not make sense yet: %s" % problem,
+                      UI["danger"])
+            return
+
+        self.busy = True
+        self.go.configure(state="disabled", text="Building...")
+        self.open_btn.configure(state="disabled")
+        written = self.app.write_files()
+        path = written.get(spy.name)
+        if not path:
+            self.finished(-1, "", "ScratchPy could not write the Python file.")
+            return
+
+        icon = ""
+        if self.icon_master is not None:
+            try:
+                folder = os.path.join(self.app.project.folder(),
+                                      "scratchpy_icons")
+                made = write_icon_files(folder, name, self.icon_master)
+                self.icon_files = made
+                icon = made["icns"] if sys.platform == "darwin" else made["ico"]
+                self.say("Icon written to %s" % os.path.basename(icon))
+            except Exception as exc:
+                self.say("(no icon: %s)" % exc)
+
+        plan = {"source": path, "name": name, "icon": icon,
+                "onefile": bool(self.onefile.get()),
+                "console": bool(self.console.get()),
+                "into": os.path.join(self.app.project.folder(), "dist")}
+        self.tell("Building %s ... the first one takes a minute or two."
+                  % self.app.builder.built_name(plan))
+        self.say("--- building %s ---" % plan["name"])
+
+        def with_tools(version):
+            if version:
+                self.say("PyInstaller %s" % version)
+                self.app.builder.build(plan, self.say, self.after_build)
+                return
+            self.tell("Fetching PyInstaller first...")
+            self.app.builder.fetch_tools(
+                self.say,
+                lambda code: (self.app.builder.build(plan, self.say,
+                                                     self.after_build)
+                              if code == 0 else
+                              self.finished(code, "",
+                                            "PyInstaller would not install.")))
+        self.app.builder.look_for_tools(with_tools)
+
+    def after_build(self, code: int, where: str):
+        if code == 0 and where:
+            self.finished(code, where, "")
+        else:
+            self.finished(code, "", "PyInstaller stopped with code %s. The "
+                                    "last few lines above say why." % code)
+
+    def finished(self, code: int, where: str, trouble: str):
+        self.busy = False
+        try:
+            self.go.configure(state="normal", text="Build the app")
+        except Exception:
+            return
+        if trouble or not where:
+            self.tell(trouble or "It did not build.", UI["danger"])
+            return
+        self.made = where
+        self.open_btn.configure(state="normal")
+        size = ""
+        try:
+            size = " (%s)" % human_size(os.path.getsize(where))
+        except Exception:
+            pass
+        self.say("--- done: %s%s ---" % (where, size))
+        self.tell("Built %s%s\nIt is in the dist folder next to your project."
+                  % (os.path.basename(where), size), "#2E9E5B")
+        self.app.status("Built " + os.path.basename(where))
+
+    def open_folder(self):
+        self.app.reveal(os.path.dirname(self.made) if self.made
+                        else os.path.join(self.app.project.folder(), "dist"))
 
 
 class UpdateDialog:
@@ -10638,6 +11078,231 @@ def write_icon_files(folder: str, base: str = "scratchpy_icon",
         fh.write(b"icns" + struct.pack(">I", len(body) + 8) + body)
     out["icns"] = icns_path
     return out
+
+
+# --------------------------------------------------------------------------- #
+#  Turning a picture you chose into an application icon.
+#
+#  PNG is read here, from scratch, with nothing but zlib - the same library the
+#  icon writer above uses.  GIF goes through Tk, which already knows how.  For
+#  a JPEG there is no way round it: that needs Pillow, and ScratchPy offers to
+#  install it rather than pretending.
+# --------------------------------------------------------------------------- #
+
+PICTURE_TYPES = [("Pictures", "*.png *.gif *.jpg *.jpeg *.bmp *.webp"),
+                 ("PNG", "*.png"), ("GIF", "*.gif"),
+                 ("JPEG (needs Pillow)", "*.jpg *.jpeg"),
+                 ("Every file", "*.*")]
+
+
+def unfilter_png(raw: bytes, height: int, bpp: int, stride: int) -> bytearray:
+    """Undo the per line filters a PNG uses to squeeze itself smaller."""
+    out = bytearray(height * stride)
+    prev = bytearray(stride)
+    pos = 0
+    for y in range(height):
+        if pos >= len(raw):
+            raise ValueError("this PNG stops in the middle")
+        kind = raw[pos]
+        pos += 1
+        line = bytearray(raw[pos:pos + stride])
+        if len(line) < stride:
+            raise ValueError("this PNG stops in the middle")
+        pos += stride
+        if kind == 1:                                   # each byte, plus its left
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 0xFF
+        elif kind == 2:                                 # plus the one above
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif kind == 3:                                 # plus their average
+            for i in range(stride):
+                left = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif kind == 4:                                 # Paeth: whichever is nearest
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                if pa <= pb and pa <= pc:
+                    near = a
+                elif pb <= pc:
+                    near = b
+                else:
+                    near = c
+                line[i] = (line[i] + near) & 0xFF
+        elif kind != 0:
+            raise ValueError("this PNG uses a filter ScratchPy does not know")
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+    return out
+
+
+def decode_png(data: bytes) -> Tuple[int, int, bytearray]:
+    """A PNG file in; its width, height and plain RGBA bytes out."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("that file is not a PNG")
+    width = height = depth = mode = interlace = 0
+    squashed = bytearray()
+    palette = b""
+    see_through = b""
+    pos = 8
+    while pos + 8 <= len(data):
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b"IHDR":
+            (width, height, depth, mode, _squeeze, _filter,
+             interlace) = struct.unpack(">IIBBBBB", body)
+        elif kind == b"PLTE":
+            palette = body
+        elif kind == b"tRNS":
+            see_through = body
+        elif kind == b"IDAT":
+            squashed += body
+        elif kind == b"IEND":
+            break
+    if not width or not height:
+        raise ValueError("this PNG has no picture in it")
+    if interlace:
+        raise ValueError("this PNG is interlaced")      # Tk can read those
+    if width * height > 30000000:
+        raise ValueError("that picture is enormous - try a smaller one")
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(mode)
+    if channels is None:
+        raise ValueError("this PNG is stored in a way ScratchPy cannot read")
+    if depth not in (1, 2, 4, 8, 16) or (mode != 3 and depth < 8):
+        raise ValueError("this PNG uses %d bits a colour, which ScratchPy "
+                         "cannot read" % depth)
+    stride = (width * channels * depth + 7) // 8
+    bpp = max(1, channels * depth // 8)
+    rows = unfilter_png(zlib.decompress(bytes(squashed)), height, bpp, stride)
+
+    rgba = bytearray(width * height * 4)
+    step = 2 if depth == 16 else 1
+    for y in range(height):
+        line = rows[y * stride:(y + 1) * stride]
+        out = y * width * 4
+        if mode == 3:                                   # a palette of colours
+            for x in range(width):
+                if depth == 8:
+                    index = line[x]
+                else:
+                    per = 8 // depth
+                    shift = 8 - depth * (x % per + 1)
+                    index = (line[x // per] >> shift) & ((1 << depth) - 1)
+                at = index * 3
+                rgba[out:out + 3] = palette[at:at + 3] or b"\0\0\0"
+                rgba[out + 3] = (see_through[index]
+                                 if index < len(see_through) else 255)
+                out += 4
+        else:
+            span = channels * step
+            for x in range(width):
+                at = x * span
+                if mode in (0, 4):                      # grey, maybe with alpha
+                    grey = line[at]
+                    rgba[out] = rgba[out + 1] = rgba[out + 2] = grey
+                    rgba[out + 3] = line[at + step] if mode == 4 else 255
+                else:                                   # colour, maybe with alpha
+                    rgba[out] = line[at]
+                    rgba[out + 1] = line[at + step]
+                    rgba[out + 2] = line[at + 2 * step]
+                    rgba[out + 3] = line[at + 3 * step] if mode == 6 else 255
+                out += 4
+    return width, height, rgba
+
+
+def square_raster(width: int, height: int, rgba: bytearray) -> "Raster":
+    """Put a picture of any shape in the middle of a see-through square."""
+    side = max(width, height)
+    out = Raster(side)
+    left, top = (side - width) // 2, (side - height) // 2
+    for y in range(height):
+        start = ((y + top) * side + left) * 4
+        source = y * width * 4
+        out.buf[start:start + width * 4] = rgba[source:source + width * 4]
+    return out
+
+
+def shrink_rgba(width: int, height: int, rgba: bytearray,
+                longest: int) -> Tuple[int, int, bytearray]:
+    """Drop rows and columns until a big photo is a workable size.
+
+    A proper box filter afterwards does the quality; this is only here so a
+    twelve megapixel holiday snap does not take a minute.
+    """
+    if max(width, height) <= longest:
+        return width, height, rgba
+    take = (max(width, height) + longest - 1) // longest
+    new_w, new_h = max(1, width // take), max(1, height // take)
+    small = bytearray(new_w * new_h * 4)
+    for y in range(new_h):
+        row = (y * take) * width
+        out = y * new_w * 4
+        for x in range(new_w):
+            at = (row + x * take) * 4
+            small[out:out + 4] = rgba[at:at + 4]
+            out += 4
+    return new_w, new_h, small
+
+
+def raster_from_tk(path: str) -> "Raster":
+    """Let Tk read it - it knows GIF, and PNGs this file cannot manage."""
+    photo = tk.PhotoImage(file=path)
+    width, height = photo.width(), photo.height()
+    if width * height > 4000000:
+        raise ValueError("that picture is too big to read this way")
+    rgba = bytearray(width * height * 4)
+    at = 0
+    for y in range(height):
+        for x in range(width):
+            value = photo.get(x, y)
+            if isinstance(value, str):
+                value = [int(part) for part in value.split()]
+            rgba[at] = value[0]
+            rgba[at + 1] = value[1]
+            rgba[at + 2] = value[2]
+            rgba[at + 3] = 0 if photo.transparency_get(x, y) else 255
+            at += 4
+    return square_raster(width, height, rgba)
+
+
+def raster_from_pillow(path: str) -> "Raster":
+    """If Pillow happens to be here, use it - it reads everything."""
+    from PIL import Image
+    with Image.open(path) as picture:
+        picture = picture.convert("RGBA")
+        if max(picture.size) > 1024:
+            picture.thumbnail((1024, 1024))
+        width, height = picture.size
+        return square_raster(width, height, bytearray(picture.tobytes()))
+
+
+def picture_as_icon(path: str) -> "Raster":
+    """Read a picture and give back a square 512 icon, ready to be written."""
+    name = str(path).lower()
+    trouble = []
+    if name.endswith(".png"):
+        try:
+            with open(path, "rb") as fh:
+                width, height, rgba = decode_png(fh.read())
+            width, height, rgba = shrink_rgba(width, height, rgba, 1024)
+            return square_raster(width, height, rgba).scaled(512)
+        except Exception as exc:
+            trouble.append(str(exc))
+    for reader in (raster_from_pillow, raster_from_tk):
+        try:
+            return reader(path).scaled(512)
+        except ImportError:
+            continue
+        except Exception as exc:
+            trouble.append(str(exc))
+    raise ValueError(
+        "ScratchPy could not read that picture. It reads PNG and GIF on its "
+        "own; for a JPEG install Pillow. (%s)" % "; ".join(trouble[:2]))
 
 
 def icon_folders() -> List[str]:
