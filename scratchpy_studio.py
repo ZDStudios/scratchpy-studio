@@ -8753,6 +8753,7 @@ class BuildAppDialog:
     def __init__(self, parent, app: "App"):
         self.app = app
         self.busy = False
+        self.blocked = False
         self.icon_master: Optional[Raster] = None
         self.icon_path = ""
         self.icon_files: Dict[str, str] = {}
@@ -8887,6 +8888,8 @@ class BuildAppDialog:
     # -- talking to the person ------------------------------------------------ #
 
     def say(self, line: str):
+        if "Access is denied" in line or "PermissionError" in line:
+            self.blocked = True
         def do():
             try:
                 self.log.configure(state="normal")
@@ -9020,6 +9023,7 @@ class BuildAppDialog:
             return
 
         self.busy = True
+        self.blocked = False
         self.go.configure(state="disabled", text="Building...")
         self.open_btn.configure(state="disabled")
         written = self.app.write_files()
@@ -9077,6 +9081,12 @@ class BuildAppDialog:
         except Exception:
             return
         if trouble or not where:
+            if self.blocked:
+                # OneDrive and Dropbox grab a file the moment it appears, and
+                # PyInstaller cannot replace one that is being synced
+                trouble = ("Something was holding the file - a cloud folder "
+                           "like OneDrive syncing it, or the app still "
+                           "running. Wait a moment and build again.")
             self.tell(trouble or "It did not build.", UI["danger"])
             return
         self.made = where
