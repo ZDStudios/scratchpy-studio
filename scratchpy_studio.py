@@ -50,7 +50,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 APP_NAME = "ScratchPy Studio"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 PROJECT_EXT = ".spy"
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -5049,6 +5049,9 @@ class PaletteView(ttk.Frame):
 # =========================================================================== #
 
 FROZEN = bool(getattr(sys, "frozen", False))
+# --selftest and --mcp build the window without a person in front of it, so
+# nothing should pop up or wander off to the internet on its own.
+HEADLESS = False
 
 if FROZEN:
     # A bundled app lives next to its .exe / .app, not in the unpacking folder.
@@ -5111,8 +5114,8 @@ def version_tuple(text: str) -> tuple:
     return tuple(parts + [0, 0, 0])[:3]
 
 
-def latest_release(timeout: float = 12.0) -> Tuple[str, str]:
-    """Ask GitHub for the newest published version. Returns (tag, error)."""
+def latest_release_info(timeout: float = 12.0) -> Tuple[dict, str]:
+    """The newest published release, as GitHub describes it. ({}, error)."""
     import urllib.request
     request = urllib.request.Request(
         RELEASES_API,
@@ -5121,9 +5124,356 @@ def latest_release(timeout: float = 12.0) -> Tuple[str, str]:
     try:
         with urllib.request.urlopen(request, timeout=timeout) as reply:
             data = json.loads(reply.read().decode("utf-8", "replace"))
-        return str(data.get("tag_name") or ""), ""
     except Exception as exc:
-        return "", "%s: %s" % (type(exc).__name__, exc)
+        return {}, friendly_download_error(exc)
+    release = {
+        "tag": str(data.get("tag_name") or ""),
+        "name": str(data.get("name") or ""),
+        "notes": str(data.get("body") or ""),
+        "page": str(data.get("html_url") or RELEASES_URL),
+        "assets": [{"name": str(a.get("name") or ""),
+                    "url": str(a.get("browser_download_url") or ""),
+                    "size": int(a.get("size") or 0)}
+                   for a in (data.get("assets") or [])],
+    }
+    return release, ""
+
+
+def latest_release(timeout: float = 12.0) -> Tuple[str, str]:
+    """Ask GitHub for the newest published version. Returns (tag, error)."""
+    release, error = latest_release_info(timeout)
+    return release.get("tag", ""), error
+
+
+# --------------------------------------------------------------------------- #
+#  Updating itself.  Everything comes from this project's own GitHub releases
+#  over https, and nowhere else - the host is checked before and after the
+#  redirect GitHub sends downloads through.
+# --------------------------------------------------------------------------- #
+
+UPDATE_HOSTS = ("github.com", "api.github.com", "raw.githubusercontent.com",
+                "objects.githubusercontent.com",
+                "release-assets.githubusercontent.com")
+# Two ways to the same file.  The API hands it over directly, which matters on
+# school and office networks that inspect secure traffic: those tend to leave
+# api.github.com alone while breaking the download hosts.
+SOURCE_API = ("https://api.github.com/repos/ZDStudios/scratchpy-studio"
+              "/contents/scratchpy_studio.py?ref=%s")
+SOURCE_RAW = ("https://raw.githubusercontent.com/ZDStudios/scratchpy-studio"
+              "/%s/scratchpy_studio.py")
+UPDATE_EVERY = 24 * 60 * 60      # a quiet look once a day, no more
+
+
+def github_url_ok(url: str) -> bool:
+    import urllib.parse
+    parts = urllib.parse.urlsplit(str(url))
+    host = (parts.hostname or "").lower()
+    return parts.scheme == "https" and (
+        host in UPDATE_HOSTS or host.endswith(".githubusercontent.com"))
+
+
+def friendly_download_error(exc: Exception, where: str = "github.com") -> str:
+    """Say what actually went wrong, in words that suggest what to do."""
+    text = str(exc)
+    if "CERTIFICATE_VERIFY_FAILED" in text:
+        return ("this network is looking inside secure connections, so "
+                "ScratchPy cannot tell whether it is really talking to %s. "
+                "A web browser will usually still get through" % where)
+    if "Name or service not known" in text or "getaddrinfo failed" in text:
+        return "this computer cannot reach the internet at the moment"
+    return "%s: %s" % (type(exc).__name__, exc)
+
+
+def download_from_github(url: str, into: str, progress=None,
+                         timeout: float = 60.0, accept: str = "*/*") -> str:
+    """Fetch a file from this project's GitHub, and refuse anywhere else."""
+    import urllib.request
+    if not github_url_ok(url):
+        raise ValueError("updates only come from github.com")
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "ScratchPyStudio/" + APP_VERSION,
+                      "Accept": accept})
+    with urllib.request.urlopen(request, timeout=timeout) as reply:
+        # GitHub sends downloads on to a storage host; check where we landed
+        if not github_url_ok(getattr(reply, "url", url)):
+            raise ValueError("that download was sent somewhere unexpected")
+        total = int(reply.headers.get("Content-Length") or 0)
+        done = 0
+        with open(into, "wb") as out:
+            while True:
+                chunk = reply.read(65536)
+                if not chunk:
+                    break
+                out.write(chunk)
+                done += len(chunk)
+                if progress:
+                    progress(done, total)
+    return into
+
+
+def update_style() -> str:
+    """How this copy of ScratchPy can replace itself.
+
+    'source'  - one .py file, swapped in place
+    'windows' - the bundled .exe, renamed out of the way while it runs
+    'linux'   - the bundled binary, replaced in place
+    'macos'   - downloaded beside the app for you to drop in
+    'no-room' - nothing here is writable
+    """
+    target = APP_DIR if FROZEN else os.path.dirname(source_file())
+    if not os.access(target, os.W_OK):
+        return "no-room"
+    if not FROZEN:
+        return "source" if os.access(source_file(), os.W_OK) else "no-room"
+    if IS_WINDOWS:
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def source_file() -> str:
+    """The .py file this copy is running out of."""
+    try:
+        return os.path.abspath(__file__)
+    except NameError:                                   # pragma: no cover
+        return os.path.join(APP_DIR, "scratchpy_studio.py")
+
+
+ASSET_FOR = {"windows": "ScratchPyStudio.exe",
+             "linux": "ScratchPy-Studio-Linux.zip",
+             "macos": "ScratchPy-Studio-macOS.zip"}
+
+
+class Updater:
+    """Looks for a newer ScratchPy, and puts it in place when you say so."""
+
+    def __init__(self, app: "App"):
+        self.app = app
+        self.busy = False
+        self.release: dict = {}
+
+    # -- looking -------------------------------------------------------------- #
+
+    def check(self, then: Callable[[dict, str], Any]):
+        """Ask GitHub in the background; `then(release, error)` on the main thread."""
+        def worker():
+            release, error = latest_release_info()
+            self.app.ui(lambda: then(release, error))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def is_newer(self, release: dict) -> bool:
+        tag = release.get("tag", "")
+        return bool(tag) and version_tuple(tag) > version_tuple(APP_VERSION)
+
+    def check_quietly(self):
+        """The look taken shortly after start up. Silent unless there is news."""
+        settings = self.app.settings
+        if not settings.get("check_updates", True) or HEADLESS:
+            return
+        last = float(settings.get("last_update_check") or 0)
+        if time.time() - last < UPDATE_EVERY:
+            return
+
+        def arrived(release, error):
+            settings.set("last_update_check", time.time())
+            if error or not self.is_newer(release):
+                return
+            if release.get("tag") == settings.get("skip_version"):
+                return
+            self.release = release
+            UpdateDialog(self.app.root, self.app, release)
+        self.check(arrived)
+
+    # -- installing ----------------------------------------------------------- #
+
+    def asset(self, release: dict, name: str) -> dict:
+        for item in release.get("assets", []):
+            if item.get("name") == name:
+                return item
+        return {}
+
+    def install(self, release: dict, progress: Callable[[str, float], Any],
+                done: Callable[[str, str], Any]):
+        """Put the new version in place, on a background thread.
+
+        `done(where, error)` is called on the main thread afterwards.
+        """
+        if self.busy:
+            return
+        self.busy = True
+        style = update_style()
+
+        def worker():
+            where, error = "", ""
+            try:
+                where = getattr(self, "install_" + style.replace("-", "_"))(
+                    release, progress)
+            except Exception as exc:
+                error = friendly_download_error(exc)
+            self.busy = False
+            self.app.ui(lambda: done(where, error))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def temp_folder(self) -> str:
+        import tempfile
+        folder = os.path.join(tempfile.gettempdir(), "scratchpy_update")
+        os.makedirs(folder, exist_ok=True)
+        return folder
+
+    def watcher(self, progress, share: float = 1.0):
+        def report(done, total):
+            progress("Downloading... %s" % human_size(done),
+                     (done / total * share) if total else 0.0)
+        return report
+
+    def install_source(self, release: dict, progress) -> str:
+        """One file in, one file out - the whole app is a single .py."""
+        tag = release.get("tag") or "main"
+        target = source_file()
+        fresh = target + ".new"          # same folder, so the swap is atomic
+        try:
+            progress("Fetching %s..." % tag, 0.0)
+            trouble = None
+            for url, accept in ((SOURCE_API % tag, "application/vnd.github.raw"),
+                                (SOURCE_RAW % tag, "*/*")):
+                try:
+                    download_from_github(url, fresh,
+                                         self.watcher(progress, 0.8),
+                                         accept=accept)
+                    trouble = None
+                    break
+                except Exception as exc:
+                    trouble = exc
+            if trouble is not None:
+                raise trouble
+            with open(fresh, "r", encoding="utf-8") as fh:
+                text = fh.read()
+            progress("Checking it really is ScratchPy...", 0.85)
+            check_download_is_scratchpy(text, tag)
+            backup = os.path.join(os.path.dirname(target),
+                                  "scratchpy_studio.previous.py")
+            progress("Putting it in place...", 0.95)
+            shutil.copy2(target, backup)
+            os.replace(fresh, target)
+        finally:
+            if os.path.exists(fresh):
+                try:
+                    os.remove(fresh)
+                except Exception:
+                    pass
+        progress("Ready.", 1.0)
+        return target
+
+    def install_windows(self, release: dict, progress) -> str:
+        """A running .exe cannot be written over, but it can be renamed."""
+        item = self.asset(release, ASSET_FOR["windows"])
+        if not item.get("url"):
+            raise ValueError("this release has no Windows download")
+        here = os.path.abspath(sys.executable)
+        fresh = here + ".new"
+        progress("Downloading the new app...", 0.0)
+        download_from_github(item["url"], fresh, self.watcher(progress, 0.9))
+        check_download_size(fresh, item.get("size", 0))
+        backup = here + ".previous"
+        progress("Putting it in place...", 0.95)
+        if os.path.exists(backup):
+            os.remove(backup)
+        os.replace(here, backup)
+        try:
+            os.replace(fresh, here)
+        except Exception:
+            os.replace(backup, here)            # put the old one back
+            raise
+        progress("Ready.", 1.0)
+        return here
+
+    def install_linux(self, release: dict, progress) -> str:
+        import zipfile
+        item = self.asset(release, ASSET_FOR["linux"])
+        if not item.get("url"):
+            raise ValueError("this release has no Linux download")
+        here = os.path.abspath(sys.executable)
+        bundle = os.path.join(self.temp_folder(), ASSET_FOR["linux"])
+        progress("Downloading the new app...", 0.0)
+        download_from_github(item["url"], bundle, self.watcher(progress, 0.85))
+        check_download_size(bundle, item.get("size", 0))
+        progress("Unpacking...", 0.9)
+        fresh = here + ".new"
+        with zipfile.ZipFile(bundle) as zf:
+            inside = [n for n in zf.namelist()
+                      if os.path.basename(n) == "ScratchPyStudio"]
+            if not inside:
+                raise ValueError("the download has no ScratchPyStudio in it")
+            with zf.open(inside[0]) as src, open(fresh, "wb") as out:
+                shutil.copyfileobj(src, out)
+        os.chmod(fresh, 0o755)
+        backup = here + ".previous"
+        progress("Putting it in place...", 0.95)
+        if os.path.exists(backup):
+            os.remove(backup)
+        os.replace(here, backup)
+        try:
+            os.replace(fresh, here)
+        except Exception:
+            os.replace(backup, here)
+            raise
+        progress("Ready.", 1.0)
+        return here
+
+    def install_macos(self, release: dict, progress) -> str:
+        """Left for you to drop in: swapping a running .app is Finder's job."""
+        item = self.asset(release, ASSET_FOR["macos"])
+        if not item.get("url"):
+            raise ValueError("this release has no macOS download")
+        into = os.path.join(APP_DIR, ASSET_FOR["macos"])
+        progress("Downloading the new app...", 0.0)
+        download_from_github(item["url"], into, self.watcher(progress, 0.98))
+        check_download_size(into, item.get("size", 0))
+        progress("Downloaded.", 1.0)
+        return into
+
+    def install_no_room(self, release: dict, progress) -> str:
+        raise PermissionError(
+            "ScratchPy cannot write to its own folder, so it cannot replace "
+            "itself. Download it by hand, or move ScratchPy somewhere you own.")
+
+
+def human_size(count: float) -> str:
+    if count < 1024:
+        return "%d bytes" % count
+    if count < 1024 * 1024:
+        return "%.0f KB" % (count / 1024.0)
+    return "%.1f MB" % (count / 1048576.0)
+
+
+def check_download_size(path: str, expected: int):
+    got = os.path.getsize(path)
+    if got < 100000:
+        raise ValueError("the download stopped early (%s)" % human_size(got))
+    if expected and abs(got - expected) > 4096:
+        raise ValueError("the download is the wrong size (%s, expected %s)"
+                         % (human_size(got), human_size(expected)))
+
+
+def restart_command() -> List[str]:
+    """How to start the copy of ScratchPy that is now sitting on disk."""
+    if FROZEN:
+        return [sys.executable]
+    return [PYTHON_EXE or sys.executable, source_file()]
+
+
+def check_download_is_scratchpy(text: str, tag: str):
+    """Never replace ourselves with something that is not ScratchPy."""
+    if len(text) < 100000 or "class BlockSpec" not in text:
+        raise ValueError("that download does not look like ScratchPy")
+    compile(text, "<update>", "exec")            # and it has to be real Python
+    found = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', text, re.M)
+    if not found:
+        raise ValueError("that download has no version in it")
+    if version_tuple(found.group(1)) != version_tuple(tag):
+        raise ValueError("the file says %s but the release says %s"
+                         % (found.group(1), tag.lstrip("vV")))
 
 
 def find_python() -> str:
@@ -5175,6 +5525,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "confirm_uninstall": True,
     "animations": True,
     "zoom": 1.0,
+    "check_updates": True,
+    "last_update_check": 0.0,
+    "skip_version": "",
 }
 
 
@@ -5897,7 +6250,9 @@ class PackageManager:
                     data = json.loads(reply.read().decode("utf-8", "replace"))
                 info.update(self.read_pypi(data))
             except Exception as exc:
-                info["error"] = "%s: %s" % (type(exc).__name__, exc)
+                if getattr(exc, "code", 0) == 404:
+                    info["missing"] = True
+                info["error"] = friendly_download_error(exc, "pypi.org")
             self.app.ui(lambda: done(info))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -6707,6 +7062,7 @@ class App:
                                  float(self.settings.get("zoom", 1.0)))
         self.packages = PackageManager(self)
         self.runner = Runner(self)
+        self.updater = Updater(self)
         self.file_index = 0
         self.undo_stack: List[str] = []
         self.redo_stack: List[str] = []
@@ -6747,6 +7103,8 @@ class App:
         # ask the computer what voices it has once the window is up, so the
         # "set voice to" dropdown lists real names
         root.after(1500, lambda: load_voices(self))
+        # and look for a newer ScratchPy, quietly, at most once a day
+        root.after(4000, self.updater.check_quietly)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # -- construction ------------------------------------------------------- #
@@ -6967,6 +7325,7 @@ class App:
                     ("Paste Python and turn it into blocks...",
                      self.paste_python)]),
             ("Help", [("Quick guide", self.help_guide),
+                      ("Check for updates...", self.check_for_updates),
                       ("About", self.about)]),
         ]
         for title, items in specs:
@@ -7840,6 +8199,10 @@ class App:
             "   can keep them in a venv beside your project.\n\n"
             "AI\n"
             "   The AI menu shows how to connect an assistant over MCP.\n\n"
+            "Keeping up to date\n"
+            "   ScratchPy looks for a newer version once a day and offers\n"
+            "   to fetch it. Help > Check for updates asks right away.\n"
+            "   Settings can turn the daily look off.\n\n"
             "Drag a block back onto the palette to delete it.\n"
             "Right click the canvas for clean up and delete options.")
 
@@ -7850,9 +8213,57 @@ class App:
             "Everything lives in one file, using nothing but the\n"
             "Python standard library.\n\n"
             + build_summary() + "\n\n" + REPO_URL +
-            "\n\nSettings has a 'Check for updates' button.")
+            "\n\nHelp > Check for updates fetches and installs the newest\n"
+            "version. Settings can turn the daily look on or off.")
 
-    def on_close(self):
+    def check_for_updates(self):
+        """The menu and the Settings button both come here."""
+        self.status("Asking github.com about newer versions...")
+
+        def arrived(release, error):
+            self.settings.set("last_update_check", time.time())
+            if error:
+                self.status("Could not reach github.com.")
+                messagebox.showwarning(
+                    "Check for updates",
+                    "Could not reach github.com.\n\n%s\n\nYou can always look "
+                    "at\n%s" % (error, RELEASES_URL), parent=self.root)
+                return
+            version = release.get("tag", "").lstrip("vV")
+            if self.updater.is_newer(release):
+                self.settings.set("skip_version", "")   # you asked, so show it
+                self.status("Version %s is available." % version)
+                UpdateDialog(self.root, self, release)
+            elif version_tuple(version) < version_tuple(APP_VERSION):
+                self.status("You are running %s, newer than the published %s."
+                            % (APP_VERSION, version))
+                messagebox.showinfo(
+                    "Check for updates",
+                    "You are running %s, which is newer than the published "
+                    "%s." % (APP_VERSION, version), parent=self.root)
+            else:
+                self.status("Up to date - %s is the newest." % APP_VERSION)
+                messagebox.showinfo(
+                    "Check for updates",
+                    "Up to date.\n\n%s is the newest version."
+                    % APP_VERSION, parent=self.root)
+        self.updater.check(arrived)
+
+    def restart(self):
+        """Close tidily, then start the copy that is now on disk."""
+        if not self.shut_down():
+            return
+        try:
+            subprocess.Popen(restart_command(), cwd=APP_DIR, **spawn_kwargs())
+        except Exception as exc:
+            messagebox.showwarning(
+                "Restart", "The new version is in place, but ScratchPy could "
+                           "not start it:\n\n%s\n\nStart it yourself and you "
+                           "will be on the new one." % exc, parent=self.root)
+        self.root.destroy()
+
+    def shut_down(self) -> bool:
+        """Everything that has to happen before the window goes away."""
         self.workspace.close_editor(True)
         if self.runner.running:
             self.runner.stop()
@@ -7860,7 +8271,10 @@ class App:
                 self.project.dirty:
             self.autosave()
         self.settings.set("zoom", round(self.renderer.scale, 2))
-        if not self.confirm_discard():
+        return self.confirm_discard()
+
+    def on_close(self):
+        if not self.shut_down():
             return
         self.root.destroy()
 
@@ -8240,6 +8654,213 @@ class SoundPane(ttk.Frame):
         self.app.workspace.add_block(first)
         self.app.categories.select("sound")
         self.app.status("Added the sound blocks to the workspace.")
+
+
+class UpdateDialog:
+    """What is new, and a button that actually goes and gets it."""
+
+    HOW = {
+        "source": "ScratchPy is one Python file, so it can swap itself over.",
+        "windows": "ScratchPy can replace its own app and restart.",
+        "linux": "ScratchPy can replace its own app and restart.",
+        "macos": "The new app will be downloaded next to this one, ready for "
+                 "you to drag into place.",
+        "no-room": "ScratchPy cannot write to its own folder, so this one has "
+                   "to be downloaded by hand.",
+    }
+
+    def __init__(self, parent, app: "App", release: dict):
+        self.app = app
+        self.release = release
+        self.style = update_style()
+        self.installed = ""
+        version = release.get("tag", "").lstrip("vV")
+
+        top = self.top = tk.Toplevel(parent)
+        top.title("Update available")
+        top.configure(bg=UI["panel"])
+        top.transient(parent)
+        top.resizable(False, False)
+
+        head = tk.Frame(top, bg=UI["topbar"])
+        head.pack(fill="x")
+        tk.Label(head, text="ScratchPy Studio %s is out" % version,
+                 bg=UI["topbar"], fg="#FFFFFF",
+                 font=(FONT_FAMILY, 14, "bold")).pack(anchor="w", padx=20,
+                                                      pady=(14, 0))
+        tk.Label(head, text="You have %s. %s"
+                            % (APP_VERSION, self.HOW.get(self.style, "")),
+                 bg=UI["topbar"], fg="#D8CBFF", font=(FONT_FAMILY, 9),
+                 anchor="w", justify="left", wraplength=440).pack(
+                     anchor="w", padx=20, pady=(2, 14))
+
+        tk.Label(top, text="What changed", bg=UI["panel"], fg=UI["text"],
+                 font=(FONT_FAMILY, 9, "bold")).pack(anchor="w", padx=20,
+                                                     pady=(14, 4))
+        notes = tk.Frame(top, bg=UI["panel"])
+        notes.pack(fill="both", expand=True, padx=20)
+        text = tk.Text(notes, width=62, height=12, font=(FONT_FAMILY, 9),
+                       bg="#FFFFFF", relief="flat", padx=10, pady=8,
+                       wrap="word", highlightthickness=1,
+                       highlightbackground=UI["border"])
+        scroll = ttk.Scrollbar(notes, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+        text.insert("1.0", tidy_notes(release.get("notes", ""))
+                    or "No notes were written for this one.")
+        text.configure(state="disabled")
+
+        self.status = tk.Label(top, text="", bg=UI["panel"], fg="#8A93A5",
+                               font=(FONT_FAMILY, 9), anchor="w",
+                               justify="left", wraplength=440)
+        self.status.pack(fill="x", padx=20, pady=(10, 0))
+        self.meter = ttk.Progressbar(top, mode="determinate", maximum=1000)
+
+        row = tk.Frame(top, bg=UI["panel"])
+        row.pack(fill="x", padx=20, pady=(10, 6))
+        self.go = tk.Button(row, text=self.button_text(), command=self.start,
+                            relief="flat", bd=0, bg=UI["accent"], fg="#FFFFFF",
+                            activebackground="#3373CC",
+                            activeforeground="#FFFFFF", cursor="hand2",
+                            font=(FONT_FAMILY, 10, "bold"), padx=20, pady=7)
+        self.go.pack(side="left")
+        tk.Button(row, text="Read it on GitHub", command=self.open_page,
+                  relief="flat", bd=0, bg="#EEF1F6", fg=UI["text"],
+                  font=(FONT_FAMILY, 9), cursor="hand2", padx=12,
+                  pady=7).pack(side="left", padx=6)
+        tk.Button(row, text="Not now", command=self.close, relief="flat", bd=0,
+                  bg="#EEF1F6", fg=UI["text"], font=(FONT_FAMILY, 9),
+                  cursor="hand2", padx=14, pady=7).pack(side="right")
+
+        foot = tk.Frame(top, bg=UI["panel"])
+        foot.pack(fill="x", padx=20, pady=(0, 16))
+        self.auto = tk.BooleanVar(value=bool(app.settings.get("check_updates",
+                                                              True)))
+        tk.Checkbutton(foot, text="Look for updates when ScratchPy starts",
+                       variable=self.auto, command=self.remember_auto,
+                       bg=UI["panel"], fg=UI["text"], selectcolor="#FFFFFF",
+                       activebackground=UI["panel"], font=(FONT_FAMILY, 9),
+                       anchor="w").pack(side="left")
+        tk.Button(foot, text="Skip this one", command=self.skip, relief="flat",
+                  bd=0, bg=UI["panel"], fg="#8A93A5", font=(FONT_FAMILY, 8),
+                  cursor="hand2", activebackground="#EEF1F6").pack(side="right")
+
+        top.bind("<Escape>", lambda e: self.close())
+        top.protocol("WM_DELETE_WINDOW", self.close)
+        try:
+            top.update_idletasks()
+            x = parent.winfo_rootx() + (parent.winfo_width() -
+                                        top.winfo_width()) // 2
+            y = parent.winfo_rooty() + 70
+            top.geometry("+%d+%d" % (max(0, x), max(0, y)))
+        except Exception:
+            pass
+        self.go.focus_set()
+
+    # -- little pieces -------------------------------------------------------- #
+
+    def button_text(self) -> str:
+        if self.style in ("macos", "no-room"):
+            return "Download it"
+        return "Install it now"
+
+    def remember_auto(self):
+        self.app.settings.set("check_updates", bool(self.auto.get()))
+
+    def skip(self):
+        self.app.settings.set("skip_version", self.release.get("tag", ""))
+        self.app.status("That version will not be mentioned again.")
+        self.close()
+
+    def open_page(self):
+        import webbrowser
+        try:
+            webbrowser.open(self.release.get("page") or RELEASES_URL)
+        except Exception:
+            self.status.configure(text=self.release.get("page") or RELEASES_URL)
+
+    def close(self):
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+
+    # -- doing it ------------------------------------------------------------- #
+
+    def start(self):
+        if self.installed:
+            self.app.restart()
+            return
+        if self.style == "no-room":
+            self.open_page()
+            self.status.configure(
+                fg="#B36B00",
+                text="ScratchPy cannot write to its own folder, so this one "
+                     "has to be downloaded by hand.")
+            return
+        self.go.configure(state="disabled", text="Working...")
+        self.meter.pack(fill="x", padx=20, pady=(6, 0))
+        self.meter["value"] = 0
+        self.app.updater.install(self.release, self.progress, self.finished)
+
+    def progress(self, message: str, fraction: float):
+        # called from the worker thread, so hand it to the main one
+        self.app.ui(lambda: self.show_progress(message, fraction))
+
+    def show_progress(self, message: str, fraction: float):
+        try:
+            self.status.configure(text=message, fg="#8A93A5")
+            self.meter["value"] = max(0, min(1000, int(fraction * 1000)))
+        except Exception:
+            pass
+
+    def finished(self, where: str, error: str):
+        try:
+            self.go.configure(state="normal")
+        except Exception:
+            return
+        if error:
+            self.meter.pack_forget()
+            self.go.configure(text=self.button_text())
+            self.status.configure(
+                fg=UI["danger"],
+                text="It did not work: %s\nYou can still download it from "
+                     "the release page." % error)
+            return
+        self.installed = where
+        self.meter["value"] = 1000
+        if self.style == "macos":
+            self.go.configure(text="Show me the file")
+            self.go.configure(command=lambda: self.app.reveal(where))
+            self.status.configure(
+                fg="#2E9E5B",
+                text="Downloaded to %s\nUnzip it and drag the new ScratchPy "
+                     "Studio over the old one." % where)
+            return
+        self.go.configure(text="Restart now")
+        self.status.configure(
+            fg="#2E9E5B",
+            text="Version %s is in place. Restart to start using it - the "
+                 "copy you were running is kept beside it, in case."
+                 % self.release.get("tag", "").lstrip("vV"))
+
+
+def tidy_notes(markdown: str, limit: int = 4000) -> str:
+    """Release notes are written in markdown; show them as plain words."""
+    out = []
+    for line in str(markdown).replace("\r", "").split("\n"):
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+        line = re.sub(r"`([^`]+)`", r"\1", line)
+        line = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", line)
+        if set(line.strip()) <= set("|-: ") and "|" in line:
+            continue                       # the line under a markdown table
+        line = re.sub(r"^\s*\|\s*", "", line)
+        line = re.sub(r"\s*\|\s*$", "", line)
+        line = line.replace(" | ", "   -   ")
+        out.append(line)
+    return "\n".join(out).strip()[:limit]
 
 
 class WebTesterDialog:
@@ -8667,10 +9288,14 @@ class PackageBrowser:
         self.app.packages.pypi_info(name, lambda got: self.after_lookup(name, got))
 
     def after_lookup(self, name: str, info: dict):
+        if info.get("missing"):
+            self.details.configure(
+                text="Could not find %s on pypi.org - check the spelling."
+                     % name)
+            return
         if info.get("error"):
             self.details.configure(
-                text="Could not find %s on pypi.org (%s)." %
-                     (name, info["error"].split(":")[0]))
+                text="Could not look %s up: %s." % (name, info["error"]))
             return
         self.got_info(info.get("name") or name, info)
         self.fill()
@@ -8875,6 +9500,18 @@ class SettingsDialog:
                        variable=self.animations, bg=UI["panel"], fg=UI["text"],
                        activebackground=UI["panel"], bd=0, highlightthickness=0,
                        font=(FONT_FAMILY, 10)).pack(anchor="w", padx=10)
+        self.auto_update = tk.BooleanVar(
+            value=bool(app.settings.get("check_updates")))
+        tk.Checkbutton(box2, text="Look for a newer ScratchPy when it starts",
+                       variable=self.auto_update, bg=UI["panel"], fg=UI["text"],
+                       activebackground=UI["panel"], bd=0, highlightthickness=0,
+                       font=(FONT_FAMILY, 10)).pack(anchor="w", padx=10)
+        tk.Label(box2, text="Once a day at most, and only ever to github.com. "
+                            "Nothing is installed without you pressing a "
+                            "button.",
+                 bg=UI["panel"], fg="#8A93A5", font=(FONT_FAMILY, 8),
+                 anchor="w", justify="left", wraplength=420).pack(
+                     anchor="w", padx=32, pady=(0, 4))
 
         box3 = tk.LabelFrame(top, text=" About this copy ", bg=UI["panel"],
                              fg=UI["text"], bd=1, relief="solid",
@@ -8985,37 +9622,31 @@ class SettingsDialog:
     def check_updates(self):
         """Ask GitHub what the newest release is. Only ever when asked."""
         self.update_btn.configure(state="disabled", text="Checking...")
-        self.update_state.configure(text="Asking github.com...")
+        self.update_state.configure(text="Asking github.com...", fg="#8A93A5")
+        self.app.settings.set("check_updates", bool(self.auto_update.get()))
+        self.app.updater.check(self.show_update)
 
-        def worker():
-            tag, error = latest_release()
-            self.app.ui(lambda: self.show_update(tag, error))
-        threading.Thread(target=worker, daemon=True).start()
-
-    def show_update(self, tag: str, error: str):
+    def show_update(self, release: dict, error: str):
         try:
             self.update_btn.configure(state="normal", text="Check for updates")
         except Exception:
             return                      # the dialog was closed while we waited
+        self.app.settings.set("last_update_check", time.time())
         if error:
             self.update_state.configure(
                 fg="#B36B00",
                 text="Could not reach github.com (%s). You can look at\n%s"
                      % (error.split(":")[0], RELEASES_URL))
             return
-        newest = version_tuple(tag)
-        mine = version_tuple(APP_VERSION)
+        tag = release.get("tag", "")
+        newest, mine = version_tuple(tag), version_tuple(APP_VERSION)
         if newest > mine:
             self.update_state.configure(
                 fg="#B36B00",
-                text="Version %s is out. You have %s.\nDownload it from %s"
-                     % (tag.lstrip("vV"), APP_VERSION, RELEASES_URL))
-            if messagebox.askyesno(
-                    "Update available",
-                    "ScratchPy Studio %s is available and you have %s.\n\n"
-                    "Open the download page?" % (tag.lstrip("vV"), APP_VERSION),
-                    parent=self.top):
-                self.open_repo_releases()
+                text="Version %s is out. You have %s." % (tag.lstrip("vV"),
+                                                          APP_VERSION))
+            self.app.settings.set("skip_version", "")
+            UpdateDialog(self.top, self.app, release)
         elif newest < mine:
             self.update_state.configure(
                 fg="#8A93A5",
@@ -9070,6 +9701,7 @@ class SettingsDialog:
         s.set("autosave", bool(self.autosave.get()))
         s.set("confirm_uninstall", bool(self.confirm.get()))
         s.set("animations", bool(self.animations.get()))
+        s.set("check_updates", bool(self.auto_update.get()))
         self.top.destroy()
         if s.get("use_venv") and not self.app.venv_ready():
             if messagebox.askyesno(
@@ -10334,6 +10966,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(build_summary())
         return 0
     if "--selftest" in args:
+        globals()["HEADLESS"] = True
         return selftest()
     if "--make-icons" in args:
         where = ASSET_DIR

@@ -57,6 +57,7 @@ and hand in.
 | 🔊 **It talks** | A Sound category that speaks, plays notes and beats drums — using the voice and speaker the computer already has |
 | 📥 **Import any `.py`** | Turn a program you already have into blocks — loops, functions, try/except, f-strings and all |
 | 📦 **Every PyPI package** | pip dashboard installs anything and turns it into blocks automatically |
+| ⬆️ **Updates itself** | Looks for a newer version once a day, shows you what changed, and installs it when you say so |
 | 🤖 **Works with AI** | Built-in MCP server so an assistant can build blocks alongside you |
 | 🎨 **Looks the part** | Because half the point of Scratch is that it looks inviting |
 
@@ -324,6 +325,41 @@ No Python at all? Take one from the
 
 Each build carries its own Python, so your block programs run even on a machine
 that has none. (Installing packages with pip still wants a normal Python.)
+
+### It keeps itself up to date
+
+Once a day, quietly, ScratchPy asks GitHub whether there is a newer version. If
+there is, it says so — once — and offers to go and get it.
+
+<div align="center">
+<img src="docs/screenshot-update.png" width="900" alt="The update popup, showing what changed">
+</div>
+
+**Install it now** does the whole thing:
+
+* Running from source? ScratchPy is a single `.py` file, so it downloads the new
+  one, **checks it compiles and really is ScratchPy at the version it claims**,
+  keeps your old copy as `scratchpy_studio.previous.py`, and swaps it over.
+* Running the app? The new build is downloaded, checked against the size GitHub
+  published, and moved into place — the old one is kept beside it as
+  `.previous`. On Windows a running `.exe` cannot be written over, but it *can*
+  be renamed, which is exactly what happens.
+* Then **Restart now** closes tidily (asking about unsaved work first) and opens
+  the version you just installed.
+
+Nothing is downloaded, and nothing is replaced, until you press the button.
+
+The rules it will not bend: **https only**, and **only github.com** — checked
+before the request and again after the redirect GitHub sends downloads through.
+A file that does not compile, does not contain ScratchPy, or carries a different
+version from the release it came from is thrown away rather than installed.
+
+**Help → Check for updates** asks straight away. **Settings** has a switch for the
+daily look, and the popup has *Skip this one* if you would rather stay put.
+
+> On a school or office network that inspects secure traffic, the download hosts
+> may be unreachable even when github.com is not. ScratchPy says so in plain
+> words and points you at a browser, which will get through.
 
 ### Which version am I running?
 
